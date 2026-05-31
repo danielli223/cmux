@@ -434,18 +434,21 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: "n", command: false, shift: true, option: true, control: true)
             case .niriCloseColumn:
                 return StoredShortcut(key: "w", command: false, shift: false, option: true, control: true)
+            // Vim-style letters instead of arrows: Control+Option+Arrow collides with window
+            // managers (Rectangle/Magnet default to exactly ⌃⌥Arrow), Mission Control, and
+            // terminal word-movement, which steal the event before cmux sees it.
             case .niriFocusColumnLeft:
-                return StoredShortcut(key: "←", command: false, shift: false, option: true, control: true)
+                return StoredShortcut(key: "h", command: false, shift: false, option: true, control: true)
             case .niriFocusColumnRight:
-                return StoredShortcut(key: "→", command: false, shift: false, option: true, control: true)
+                return StoredShortcut(key: "l", command: false, shift: false, option: true, control: true)
             case .niriFocusWindowUp:
-                return StoredShortcut(key: "↑", command: false, shift: false, option: true, control: true)
+                return StoredShortcut(key: "k", command: false, shift: false, option: true, control: true)
             case .niriFocusWindowDown:
-                return StoredShortcut(key: "↓", command: false, shift: false, option: true, control: true)
+                return StoredShortcut(key: "j", command: false, shift: false, option: true, control: true)
             case .niriMoveColumnLeft:
-                return StoredShortcut(key: "←", command: false, shift: true, option: true, control: true)
+                return StoredShortcut(key: "h", command: false, shift: true, option: true, control: true)
             case .niriMoveColumnRight:
-                return StoredShortcut(key: "→", command: false, shift: true, option: true, control: true)
+                return StoredShortcut(key: "l", command: false, shift: true, option: true, control: true)
             case .niriToggleOverview:
                 return StoredShortcut(key: "v", command: false, shift: false, option: true, control: true)
             }

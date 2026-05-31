@@ -92,54 +92,59 @@ import Testing
 
     // MARK: - Invariant 2: focusColumn(right) reveals target without resizing
 
-    @Test func focusColumnRightPansToRevealOffscreenColumn() {
+    @Test func focusColumnRightPutsFocusInRightSlot() {
         // viewport 800; three 600-wide columns -> total 1800 > 800.
         var strip = threeColumns(viewportWidth: 800)
         let widthsBefore = strip.columns.map(\.width)
 
         #expect(strip.scrollOffset == 0)
-        // Focus column 2 (index 1): its left edge (600) anchors to the viewport's leading
-        // edge -> offset 600. Every focus press pans by exactly one column.
+        // Focus column 2 (index 1): it sits in the right slot with column 1 (index 0) in the
+        // left slot -> offset = leftEdge(0) = 0 (the first visible pair).
         strip.focusColumn(.right, viewportWidth: 800)
         #expect(strip.focusedColumnIndex == 1)
-        #expect(strip.scrollOffset == 600)
-        // No widths changed.
+        #expect(strip.scrollOffset == 0)
         #expect(strip.columns.map(\.width) == widthsBefore)
 
-        // Focus column 3 (index 2): left edge 1200 anchors to leading edge -> offset 1200.
+        // Focus column 3 (index 2): now in the right slot, column 2 (index 1) in the left slot
+        // -> offset = leftEdge(1) = 600. The window slid right by one column.
         strip.focusColumn(.right, viewportWidth: 800)
         #expect(strip.focusedColumnIndex == 2)
-        #expect(strip.scrollOffset == 1200)
+        #expect(strip.scrollOffset == 600)
         #expect(strip.columns.map(\.width) == widthsBefore)
     }
 
-    @Test func focusColumnLeftPansBackByOneColumn() {
+    @Test func focusColumnLeftSlidesWindowBackByOneColumn() {
         var strip = threeColumns(viewportWidth: 800)
         strip.focusColumn(.right, viewportWidth: 800)
-        strip.focusColumn(.right, viewportWidth: 800) // offset 1200, focus index 2
+        strip.focusColumn(.right, viewportWidth: 800) // offset 600, focus index 2
         strip.focusColumn(.left, viewportWidth: 800)  // back to index 1
-        // Column 1 (index 1) left edge 600 anchors to the leading edge -> offset 600.
+        // Index 1 in the right slot, index 0 in the left slot -> offset = leftEdge(0) = 0.
         #expect(strip.focusedColumnIndex == 1)
-        #expect(strip.scrollOffset == 600)
+        #expect(strip.scrollOffset == 0)
     }
 
-    /// Bug fix: every single focus-column press advances focus by one AND pans the viewport
-    /// (the old scroll-to-edge policy only panned once the target left the visible range, so
-    /// the first press(es) appeared to do nothing).
-    @Test func everyFocusColumnPressPansByOneColumn() {
+    /// Every focus-column press advances focus by exactly one and slides the 2-column window;
+    /// the offset increases monotonically across the strip (no "dead" presses that do nothing
+    /// then jump). The very first pair shares offset 0 (both already visible), as expected.
+    @Test func everyFocusColumnPressAdvancesAndPans() {
         // 5 columns, 600 wide, viewport 800 -> strip overflows; panning is possible.
         var strip = StripLayout(
             columns: (1...5).map { column($0, width: 600) },
             focusedColumnIndex: 0
         )
         var lastOffset = strip.scrollOffset
+        var pannedCount = 0
         for expectedIndex in 1...4 {
             let moved = strip.focusColumn(.right, viewportWidth: 800)
             #expect(moved == true)
-            #expect(strip.focusedColumnIndex == expectedIndex) // advanced by exactly one
-            #expect(strip.scrollOffset != lastOffset)          // offset updated on every press
+            #expect(strip.focusedColumnIndex == expectedIndex) // advances by exactly one
+            #expect(strip.scrollOffset >= lastOffset)          // never jumps backward
+            if strip.scrollOffset > lastOffset { pannedCount += 1 }
             lastOffset = strip.scrollOffset
         }
+        // Past the initial visible pair, every press pans -> at least 3 of the 4 presses panned.
+        #expect(pannedCount >= 3)
+        #expect(strip.scrollOffset > 0)
     }
 
     @Test func focusColumnAtEdgeReturnsFalseAndDoesNotMove() {
@@ -395,15 +400,14 @@ import Testing
     @Test func removeColumnReanchorsToColumnBoundary() {
         var strip = threeColumns(viewportWidth: 800) // total 1800
         strip.focusColumn(.right, viewportWidth: 800)
-        strip.focusColumn(.right, viewportWidth: 800) // focus last, offset 1200 (leftEdge 2)
-        #expect(strip.scrollOffset == 1200)
+        strip.focusColumn(.right, viewportWidth: 800) // focus last (index 2), offset = leftEdge(1) = 600
+        #expect(strip.scrollOffset == 600)
         strip.removeColumn(at: 2, viewportWidth: 800) // remove focused -> focus index 1 (now last)
         #expect(strip.focusedColumnIndex == 1)
-        // Offset re-anchors to the (now last) focused column's left edge -> a column boundary,
-        // so the focused column stays fully visible and the leftmost visible column starts at
-        // the content origin (no left sliver). Trailing blank is preferred over a sliver.
-        #expect(strip.scrollOffset == strip.columnLeftEdge(1))
-        #expect(strip.scrollOffset == 600)
+        // Re-anchors to the focused column's predecessor (the right-slot model): index 1 in the
+        // right slot, index 0 in the left slot -> offset = leftEdge(0) = 0, a column boundary.
+        #expect(strip.scrollOffset == strip.columnLeftEdge(0))
+        #expect(strip.scrollOffset == 0)
     }
 
     @Test func removeLastRemainingColumnResetsStrip() {

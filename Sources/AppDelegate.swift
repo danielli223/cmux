@@ -13612,9 +13612,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
             case .keyDown:
                 switch event.keyCode {
-                case 123: stripController.moveOverviewSelection(.left); return nil
-                case 124: stripController.moveOverviewSelection(.right); return nil
-                case 125, 126: return nil // swallow up/down
+                case 123, 4: stripController.moveOverviewSelection(.left); return nil  // ← or H
+                case 124, 37: stripController.moveOverviewSelection(.right); return nil // → or L
+                case 125, 126, 38, 40: return nil // swallow up/down and J/K
                 case 36, 76: self.commitNiriOverviewHold(stripController); return nil // Return
                 case 53: self.cancelNiriOverviewHold(stripController); return nil // Escape
                 case 9: return nil // V key repeats while held

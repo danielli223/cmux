@@ -37,9 +37,14 @@ in any mode; the rest act only while the strip is active.
 | ⌃⌥N | New column (open terminal, append + pan) | `shortcut.niriNewColumn` |
 | ⌃⌥⇧N | New stacked window (add below in column) | `shortcut.niriNewStackedWindow` |
 | ⌃⌥W | Close column / focused stacked window | `shortcut.niriCloseColumn` |
-| ⌃⌥← / ⌃⌥→ | Focus column left / right (pans to edge) | `shortcut.niriFocusColumnLeft` / `Right` |
-| ⌃⌥↑ / ⌃⌥↓ | Focus window up / down within column | `shortcut.niriFocusWindowUp` / `Down` |
-| ⌃⌥⇧← / ⌃⌥⇧→ | Move column left / right on the strip | `shortcut.niriMoveColumnLeft` / `Right` |
+| ⌃⌥H / ⌃⌥L | Focus column left / right | `shortcut.niriFocusColumnLeft` / `Right` |
+| ⌃⌥K / ⌃⌥J | Focus window up / down within column | `shortcut.niriFocusWindowUp` / `Down` |
+| ⌃⌥⇧H / ⌃⌥⇧L | Move column left / right on the strip | `shortcut.niriMoveColumnLeft` / `Right` |
+
+> Focus/move use **vim letters (H/J/K/L), not arrows.** `⌃⌥`+Arrow collides with window managers
+> (Rectangle/Magnet default to exactly `⌃⌥`+Arrow), macOS Mission Control, and terminal
+> word-movement, which register *global* hotkeys that steal the event before cmux's app-level
+> shortcut monitor — making arrow-based focus unreliable. Letters avoid all of those.
 | ⌃⌥V (hold) | Hold-to-preview overview (zoom out) | `shortcut.niriToggleOverview` |
 
 These do not collide with the reserved bindings (⌘D, ⌘⇧D, ⌃Tab, ⌘⇧[ / ⌘⇧], ⌥⌘+arrows).

@@ -28,10 +28,10 @@ final class WorkspaceStripController: ObservableObject {
     /// Seeded with a reasonable default so socket-driven ops before first layout still work.
     private(set) var viewportWidth: CGFloat = 1200
 
-    /// The intrinsic width assigned to newly opened columns: **half the content area**, derived
-    /// from the live viewport width so two columns fill the visible space and the third begins
-    /// the horizontal scroll. Never a hardcoded constant.
-    var newColumnWidth: CGFloat { max(320, (viewportWidth / 2).rounded()) }
+    /// The intrinsic width assigned to columns: **half the content area minus the inter-column
+    /// gap**, derived from the live viewport so exactly two columns + the gap fill the screen
+    /// (the third begins the horizontal scroll). Never a hardcoded constant.
+    var newColumnWidth: CGFloat { max(200, ((viewportWidth - layout.gap) / 2).rounded()) }
 
     /// Whether niri-mode is currently active.
     var isStripMode: Bool { mode == .strip }
@@ -65,10 +65,10 @@ final class WorkspaceStripController: ObservableObject {
         let old = viewportWidth
         guard width != old else { return }
         viewportWidth = width
-        // Columns track the content area: rescale their widths by the size ratio so they keep
-        // their fraction of the content (e.g. half each) across window/sidebar resizes.
+        // Columns track the content area: recompute every column to the new half-width so two
+        // exactly fill the screen across window/sidebar resizes, then re-pan the focused column.
         if old > 0, isStripMode {
-            layout.rescaleColumnWidths(by: width / old)
+            layout.setAllColumnWidths(newColumnWidth)
             layout.revealFocusedColumnForViewport(width)
         } else {
             layout.setScrollOffset(layout.scrollOffset, viewportWidth: width)

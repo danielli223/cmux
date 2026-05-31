@@ -43,6 +43,13 @@ struct StripWorkspaceView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .overlay(alignment: .topTrailing) {
+                if stripController.isStripMode, !stripController.isOverviewActive {
+                    StripModeIndicator()
+                        .padding(.top, 6)
+                        .padding(.trailing, 8)
+                }
+            }
             .clipped()
             .contentShape(Rectangle())
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: stripController.isOverviewActive)
@@ -156,6 +163,31 @@ struct StripWorkspaceView: View {
 
 /// An AppKit-backed transparent overlay that turns continuous two-finger trackpad scrolling
 /// into strip panning (with snap-to-column on gesture end), matching niri's touchpad gesture.
+/// A small persistent badge shown in the content area's top-right corner while niri-mode is on,
+/// so the mode is unambiguous (there is no other visible cue when a single terminal is open).
+private struct StripModeIndicator: View {
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "rectangle.split.3x1")
+                .font(.system(size: 9, weight: .bold))
+            Text(String(localized: "niri.indicator.label", defaultValue: "STRIP"))
+                .font(.system(size: 9, weight: .heavy))
+                .tracking(0.5)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.92))
+                .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
+        )
+        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        .allowsHitTesting(false)
+        .accessibilityLabel(Text("niri strip mode active"))
+    }
+}
+
 private struct StripScrollCatcher: NSViewRepresentable {
     let stripController: WorkspaceStripController
 
