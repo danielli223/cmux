@@ -156,6 +156,7 @@ enum KeyboardShortcutSettings {
         case niriFocusWindowDown
         case niriMoveColumnLeft
         case niriMoveColumnRight
+        case niriToggleOverview
 
         var id: String { rawValue }
 
@@ -248,6 +249,7 @@ enum KeyboardShortcutSettings {
             case .niriFocusWindowDown: return String(localized: "shortcut.niriFocusWindowDown.label", defaultValue: "Strip: Focus Window Down")
             case .niriMoveColumnLeft: return String(localized: "shortcut.niriMoveColumnLeft.label", defaultValue: "Strip: Move Column Left")
             case .niriMoveColumnRight: return String(localized: "shortcut.niriMoveColumnRight.label", defaultValue: "Strip: Move Column Right")
+            case .niriToggleOverview: return String(localized: "shortcut.niriToggleOverview.label", defaultValue: "Strip: Toggle Overview (Zoom Out)")
             }
         }
 
@@ -444,6 +446,8 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: "←", command: false, shift: true, option: true, control: true)
             case .niriMoveColumnRight:
                 return StoredShortcut(key: "→", command: false, shift: true, option: true, control: true)
+            case .niriToggleOverview:
+                return StoredShortcut(key: "v", command: false, shift: false, option: true, control: true)
             }
         }
 

@@ -34,6 +34,20 @@ final class WorkspaceStripController: ObservableObject {
     /// Whether niri-mode is currently active.
     var isStripMode: Bool { mode == .strip }
 
+    // MARK: - Overview (zoom-out) state
+
+    /// Whether the niri-style overview (zoom-out) is currently showing. A render + input mode
+    /// over the same ``layout`` — it does not fork the column data.
+    @Published private(set) var isOverviewActive = false
+
+    /// The column the overview highlight is on. Becomes the focused column when selected.
+    @Published private(set) var overviewSelectionIndex = 0
+
+    /// Saved viewport (focused column + scroll offset) captured when the overview opens, so
+    /// cancelling returns to the exact prior state.
+    private var savedFocusBeforeOverview = 0
+    private var savedOffsetBeforeOverview: CGFloat = 0
+
     // MARK: - Viewport
 
     /// Records the current viewport width (from the rendering `GeometryReader`) and re-clamps
@@ -78,6 +92,7 @@ final class WorkspaceStripController: ObservableObject {
     /// re-enabling restores column order) but no longer drives rendering.
     func disableStripMode() {
         guard mode != .tiling else { return }
+        isOverviewActive = false
         mode = .tiling
     }
 
@@ -164,6 +179,71 @@ final class WorkspaceStripController: ObservableObject {
         layout.moveColumn(direction, viewportWidth: viewportWidth)
     }
 
+    // MARK: - Overview (zoom-out)
+
+    /// Toggles the overview: opens it (saving the current viewport) or, if already open,
+    /// cancels it (restoring the saved viewport).
+    func toggleOverview() {
+        guard mode == .strip else { return }
+        if isOverviewActive { cancelOverview() } else { enterOverview() }
+    }
+
+    /// Opens the overview, capturing the current focused column and scroll offset so a later
+    /// cancel restores them exactly. The highlight starts on the focused column.
+    func enterOverview() {
+        guard mode == .strip, !isOverviewActive, !layout.columns.isEmpty else { return }
+        savedFocusBeforeOverview = layout.focusedColumnIndex
+        savedOffsetBeforeOverview = layout.scrollOffset
+        overviewSelectionIndex = layout.focusedColumnIndex
+        isOverviewActive = true
+    }
+
+    /// Cancels the overview without changing the selection, restoring the exact viewport
+    /// (focused column + scroll offset) from when it opened.
+    func cancelOverview() {
+        guard isOverviewActive else { return }
+        isOverviewActive = false
+        layout.restoreViewport(
+            focusedColumnIndex: savedFocusBeforeOverview,
+            scrollOffset: savedOffsetBeforeOverview
+        )
+        if let panelID = layout.focusedColumn?.focusedWindow?.raw {
+            bridge?.stripFocusPanel(panelID)
+        }
+    }
+
+    /// Moves the overview highlight one column left/right. Vertical directions are ignored
+    /// (the overview is a horizontal row of columns).
+    func moveOverviewSelection(_ direction: StripAxisDirection) {
+        guard isOverviewActive, !layout.columns.isEmpty else { return }
+        switch direction {
+        case .left:
+            overviewSelectionIndex = max(0, overviewSelectionIndex - 1)
+        case .right:
+            overviewSelectionIndex = min(layout.columns.count - 1, overviewSelectionIndex + 1)
+        case .up, .down:
+            break
+        }
+    }
+
+    /// Sets the overview highlight to a specific column (e.g. a click).
+    func setOverviewSelection(_ index: Int) {
+        guard isOverviewActive, layout.columns.indices.contains(index) else { return }
+        overviewSelectionIndex = index
+    }
+
+    /// Selects the highlighted column: makes it the focused column, closes the overview, and
+    /// pans the viewport to bring it on-screen (the leading-edge focus pan).
+    func selectOverviewColumn() {
+        guard isOverviewActive else { return }
+        let target = overviewSelectionIndex
+        isOverviewActive = false
+        layout.setFocusedColumn(target, viewportWidth: viewportWidth)
+        if let panelID = layout.focusedColumn?.focusedWindow?.raw {
+            bridge?.stripFocusPanel(panelID)
+        }
+    }
+
     // MARK: - Scrolling (trackpad)
 
     /// Pans the strip by a pixel delta (continuous two-finger trackpad pan). Does not change
@@ -241,6 +321,8 @@ final class WorkspaceStripController: ObservableObject {
             "scrollOffset": Double(layout.scrollOffset),
             "totalContentWidth": Double(layout.totalContentWidth),
             "focusedColumnIndex": layout.focusedColumnIndex,
+            "overviewActive": isOverviewActive,
+            "overviewSelectionIndex": overviewSelectionIndex,
             "columns": columns,
         ]
     }

@@ -115,6 +115,55 @@ public struct StripLayout: Equatable, Sendable, Codable {
         return frames
     }
 
+    // MARK: - Overview (zoom-out) geometry
+
+    /// The uniform scale factor that shrinks the whole strip to fit a content area of
+    /// `contentWidth`, used by the niri-style overview (zoom-out) render mode.
+    ///
+    /// Computed from total strip width → available content width so the entire strip is visible
+    /// at once. Never magnifies (capped at `1`). The `inset` (0–1) leaves breathing room at the
+    /// horizontal edges; the returned scale guarantees `totalContentWidth * scale <= contentWidth`.
+    /// - Parameters:
+    ///   - contentWidth: The content-area width (window width minus the sidebar).
+    ///   - inset: Fraction of the content width to keep the strip within (default 0.94).
+    /// - Returns: A scale in `(0, 1]`.
+    public func overviewScale(forContentWidth contentWidth: CGFloat, inset: CGFloat = 0.94) -> CGFloat {
+        guard totalContentWidth > 0, contentWidth > 0 else { return 1 }
+        return min(1, (contentWidth * inset) / totalContentWidth)
+    }
+
+    /// Resolves every column to its scaled rectangle for the overview render mode.
+    ///
+    /// Columns are laid out at their **real relative positions** (``columnLeftEdge(_:)``)
+    /// uniformly scaled by ``overviewScale(forContentWidth:inset:)``, horizontally centered and
+    /// vertically centered within the content area. The frames live in **content-area
+    /// coordinates** (origin at the sidebar's right edge), exactly like ``columnFrames(in:)``,
+    /// so the overview never overlaps the sidebar. All frames are marked visible.
+    /// - Parameters:
+    ///   - contentSize: The content-area size (window minus sidebar).
+    ///   - inset: Passed through to ``overviewScale(forContentWidth:inset:)``.
+    /// - Returns: One scaled ``StripColumnFrame`` per column, in strip order.
+    public func overviewColumnFrames(in contentSize: CGSize, inset: CGFloat = 0.94) -> [StripColumnFrame] {
+        guard !columns.isEmpty else { return [] }
+        let scale = overviewScale(forContentWidth: contentSize.width, inset: inset)
+        let scaledTotal = totalContentWidth * scale
+        let originX = max(0, (contentSize.width - scaledTotal) / 2)
+        let scaledHeight = contentSize.height * scale
+        let originY = max(0, (contentSize.height - scaledHeight) / 2)
+        var frames: [StripColumnFrame] = []
+        frames.reserveCapacity(columns.count)
+        for (index, column) in columns.enumerated() {
+            let rect = CGRect(
+                x: originX + columnLeftEdge(index) * scale,
+                y: originY,
+                width: column.width * scale,
+                height: scaledHeight
+            )
+            frames.append(StripColumnFrame(id: column.id, frame: rect, isVisible: true))
+        }
+        return frames
+    }
+
     // MARK: - Focus accessors
 
     /// The focused column, or `nil` when the strip is empty.
@@ -303,6 +352,33 @@ public struct StripLayout: Equatable, Sendable, Codable {
         guard columns.indices.contains(index) else { return }
         columns[index].width = max(80, width)
         clampScroll(viewportWidth: viewportWidth)
+    }
+
+    /// Sets the focused column by index and pans it into view (the leading-edge pan, so the
+    /// selected column lands at the content origin). Used when selecting a column from the
+    /// overview. The index is clamped into range.
+    /// - Parameters:
+    ///   - index: The column to focus.
+    ///   - viewportWidth: Current viewport width, used to pan.
+    public mutating func setFocusedColumn(_ index: Int, viewportWidth: CGFloat) {
+        guard !columns.isEmpty else { return }
+        focusedColumnIndex = min(max(index, 0), columns.count - 1)
+        revealFocusedColumn(viewportWidth: viewportWidth)
+    }
+
+    /// Restores an exact `(focusedColumnIndex, scrollOffset)` pair — used to return from the
+    /// overview when it is cancelled, preserving the precise prior viewport.
+    /// - Parameters:
+    ///   - index: The focused column index to restore.
+    ///   - offset: The scroll offset to restore.
+    public mutating func restoreViewport(focusedColumnIndex index: Int, scrollOffset offset: CGFloat) {
+        guard !columns.isEmpty else {
+            focusedColumnIndex = 0
+            scrollOffset = 0
+            return
+        }
+        focusedColumnIndex = min(max(index, 0), columns.count - 1)
+        scrollOffset = max(0, offset)
     }
 
     /// Directly sets the scroll offset (e.g. from a continuous trackpad pan), clamped to the

@@ -61,6 +61,30 @@ policies share the model:
 A horizontal two-finger trackpad scroll pans continuously (pixel-for-pixel) and snaps to the
 nearest column boundary on release. Vertical scroll falls through to the focused terminal.
 
+## Overview (zoom-out)
+
+`⌃⌥V` toggles a niri-style **overview**: the whole strip is scaled down (`overviewScale` =
+content width ÷ total strip width, capped at 1) so every column is visible at once as a tile,
+laid out at its real relative position. The sidebar is untouched — the overview only fills the
+content area to its right (frames live in content-area coordinates, same origin as normal mode).
+
+- **Navigate:** `⌃⌥←/→` (or plain arrow keys) move a highlight between columns.
+- **Select:** `Return` or a click sets that column as focused, closes the overview, and pans the
+  viewport to bring it on-screen (reusing the leading-edge focus pan).
+- **Cancel:** `Escape`, `⌃⌥V`, or clicking the dimmed backdrop closes the overview and restores
+  the exact prior viewport (focused column + scroll offset).
+- The scale transition is animated (spring). Its smoothness is a manual/human-review item.
+
+**Live miniatures vs. snapshots — decision:** v1 renders lightweight **tiles** (column
+background + title + a `n/total` tab indicator for stacked columns), *not* live or snapshot
+terminal pixels. Rationale: cmux terminals are GPU-portal windows that render above SwiftUI and
+**reflow** when their host frame shrinks (the same mechanism behind the leftmost-sliver bug), so
+scaling a live portal does not visually shrink it; and capturing a per-terminal snapshot of GPU
+content is expensive. Tiles deliver the zoom-out navigation cheaply and reliably. While the
+overview is open the live terminal portals are gated off (`isVisibleInUI = false`) so the tiles
+aren't covered — the terminal processes keep running. Live or snapshot miniatures are a
+documented future enhancement.
+
 ## Control socket (v1)
 
 Raw v1 line commands on the cmux control socket (used by automation and the
@@ -76,6 +100,9 @@ selected workspace.
 | `niri_focus <left\|right\|up\|down>` | Focus a column (left/right) or window in the column (up/down) |
 | `niri_move <left\|right>` | Reorder the focused column |
 | `niri_close` | Close the focused column's focused window |
+| `niri_overview <on\|off\|toggle>` | Open/close the zoom-out overview |
+| `niri_overview_move <left\|right>` | Move the overview highlight |
+| `niri_overview_select` | Select the highlighted column and close the overview |
 
 ## Design decisions (open questions resolved)
 

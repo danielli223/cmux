@@ -12724,32 +12724,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
         if let stripController = tabManager?.selectedTab?.stripController, stripController.isStripMode {
-            if matchConfiguredShortcut(event: event, action: .niriNewColumn) {
-                stripController.openColumn(); return true
+            // Overview toggle works whether or not the overview is currently up.
+            if matchConfiguredShortcut(event: event, action: .niriToggleOverview) {
+                stripController.toggleOverview(); return true
             }
-            if matchConfiguredShortcut(event: event, action: .niriNewStackedWindow) {
-                stripController.openStackedWindow(); return true
-            }
-            if matchConfiguredShortcut(event: event, action: .niriCloseColumn) {
-                stripController.closeFocusedColumn(); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
-                stripController.moveColumn(.left); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
-                stripController.moveColumn(.right); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
-                stripController.focusColumn(.left); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
-                stripController.focusColumn(.right); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126) {
-                stripController.focusWindow(.up); return true
-            }
-            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
-                stripController.focusWindow(.down); return true
+            if stripController.isOverviewActive {
+                // Overview navigation: arrow keys (plain or the ^⌥ layer) move the highlight,
+                // Return/click selects, Escape cancels. Unhandled keys fall through so global
+                // shortcuts (⌘Q, etc.) still work.
+                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let isPlain = mods.isEmpty
+                if (isPlain && event.keyCode == 123)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.moveOverviewSelection(.left); return true
+                }
+                if (isPlain && event.keyCode == 124)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.moveOverviewSelection(.right); return true
+                }
+                if isPlain && (event.keyCode == 36 || event.keyCode == 76) { // Return / Enter
+                    stripController.selectOverviewColumn(); return true
+                }
+                if event.keyCode == 53 { // Escape
+                    stripController.cancelOverview(); return true
+                }
+                // Swallow up/down so they don't leak to the hidden strip; everything else falls through.
+                if (isPlain && (event.keyCode == 125 || event.keyCode == 126))
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
+                    return true
+                }
+            } else {
+                if matchConfiguredShortcut(event: event, action: .niriNewColumn) {
+                    stripController.openColumn(); return true
+                }
+                if matchConfiguredShortcut(event: event, action: .niriNewStackedWindow) {
+                    stripController.openStackedWindow(); return true
+                }
+                if matchConfiguredShortcut(event: event, action: .niriCloseColumn) {
+                    stripController.closeFocusedColumn(); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.moveColumn(.left); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.moveColumn(.right); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.focusColumn(.left); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.focusColumn(.right); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126) {
+                    stripController.focusWindow(.up); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
+                    stripController.focusWindow(.down); return true
+                }
             }
         }
         // Configured split actions.

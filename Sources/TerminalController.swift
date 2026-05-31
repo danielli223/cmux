@@ -3002,6 +3002,15 @@ class TerminalController {
         case "niri_close":
             return niriAction(.close)
 
+        case "niri_overview":
+            return niriOverview(args)
+
+        case "niri_overview_move":
+            return niriOverviewMove(args)
+
+        case "niri_overview_select":
+            return niriOverviewSelect()
+
         case "list_surfaces":
             return listSurfaces(args)
 
@@ -17461,6 +17470,44 @@ class TerminalController {
             default: return "ERROR: Invalid direction. Use left, right, up, or down."
             }
             return "OK"
+        }
+    }
+
+    /// `niri_overview <on|off|toggle>` — open/close the zoom-out overview.
+    private func niriOverview(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "on", "open", "enable", "true": controller.enterOverview()
+            case "off", "close", "cancel", "disable", "false": controller.cancelOverview()
+            case "toggle", "": controller.toggleOverview()
+            default: return "ERROR: Invalid arg. Use on, off, or toggle."
+            }
+            return "OK \(controller.isOverviewActive ? "overview" : "strip")"
+        }
+    }
+
+    /// `niri_overview_move <left|right>` — move the overview highlight.
+    private func niriOverviewMove(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isOverviewActive else { return "ERROR: overview is not active" }
+            switch arg {
+            case "left": controller.moveOverviewSelection(.left)
+            case "right": controller.moveOverviewSelection(.right)
+            default: return "ERROR: Invalid direction. Use left or right."
+            }
+            return "OK \(controller.overviewSelectionIndex)"
+        }
+    }
+
+    /// `niri_overview_select` — select the highlighted column and close the overview.
+    private func niriOverviewSelect() -> String {
+        return withSelectedStripController { controller in
+            guard controller.isOverviewActive else { return "ERROR: overview is not active" }
+            controller.selectOverviewColumn()
+            return "OK \(controller.layout.focusedColumnIndex)"
         }
     }
 

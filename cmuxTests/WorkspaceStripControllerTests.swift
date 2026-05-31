@@ -169,6 +169,72 @@ import Testing
         #expect(bridge.livePanels.count == 1) // nothing created or closed
     }
 
+    // MARK: - Overview (zoom-out)
+
+    /// Build an overflowing strip (several columns, narrow viewport) focused mid-strip.
+    private func makeOverflowingStrip() -> (WorkspaceStripController, FakeStripBridge) {
+        let (controller, bridge) = makeController(seed: [UUID()])
+        controller.setViewportWidth(900)
+        controller.enableStripMode()
+        for _ in 0..<5 { controller.openColumn() } // 6 columns total
+        controller.focusColumn(.left)
+        controller.focusColumn(.left) // move focus off the end, establishing a scroll offset
+        return (controller, bridge)
+    }
+
+    @Test func togglingOverviewOnThenOffRestoresExactViewport() {
+        let (controller, _) = makeOverflowingStrip()
+        let focusBefore = controller.layout.focusedColumnIndex
+        let offsetBefore = controller.layout.scrollOffset
+
+        controller.toggleOverview()
+        #expect(controller.isOverviewActive == true)
+        // Moving the highlight around must not disturb the underlying viewport.
+        controller.moveOverviewSelection(.right)
+        controller.moveOverviewSelection(.right)
+
+        controller.toggleOverview() // cancel
+        #expect(controller.isOverviewActive == false)
+        #expect(controller.layout.focusedColumnIndex == focusBefore)
+        #expect(controller.layout.scrollOffset == offsetBefore)
+    }
+
+    @Test func selectingOverviewColumnFocusesItAndBringsItOnScreen() {
+        let (controller, bridge) = makeOverflowingStrip()
+        controller.enterOverview()
+        // Highlight the last column and select it.
+        for _ in 0..<controller.layout.columns.count {
+            controller.moveOverviewSelection(.right)
+        }
+        let target = controller.overviewSelectionIndex
+        controller.selectOverviewColumn()
+
+        #expect(controller.isOverviewActive == false)
+        #expect(controller.layout.focusedColumnIndex == target)
+        // The newly focused column is fully visible in the normal layout.
+        let viewport = CGRect(x: 0, y: 0, width: controller.viewportWidth, height: 1000)
+        let frame = controller.layout.columnFrames(in: viewport)[target].frame
+        #expect(frame.minX >= 0)
+        #expect(frame.maxX <= controller.viewportWidth + 0.01)
+        // Focus was routed to the selected column's panel.
+        #expect(bridge.focused == controller.layout.columns[target].windows.first?.raw)
+    }
+
+    @Test func overviewSelectionClampsAtEnds() {
+        let (controller, _) = makeOverflowingStrip()
+        controller.enterOverview()
+        for _ in 0..<20 { controller.moveOverviewSelection(.left) }
+        #expect(controller.overviewSelectionIndex == 0)
+        for _ in 0..<20 { controller.moveOverviewSelection(.right) }
+        #expect(controller.overviewSelectionIndex == controller.layout.columns.count - 1)
+    }
+
+    @Test func overviewIsInertWhenNotInStripMode() {
+        let (controller, _) = makeController(seed: [UUID()])
+        controller.toggleOverview() // mode is .tiling
+        #expect(controller.isOverviewActive == false)
+    }
+
     @Test func sessionRoundTripRebuildsStrip() {
         let (controller, _) = makeController(seed: [UUID()])
         controller.enableStripMode()

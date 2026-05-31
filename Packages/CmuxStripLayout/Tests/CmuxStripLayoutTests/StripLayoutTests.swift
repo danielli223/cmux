@@ -256,6 +256,53 @@ import Testing
         }
     }
 
+    // MARK: - Overview (zoom-out) geometry
+
+    /// The overview scale shrinks the whole strip to fit the content area: the total scaled
+    /// width never exceeds the content width, for both a narrow and a wide content area.
+    @Test(arguments: [CGFloat(900), CGFloat(1600)])
+    func overviewScaleFitsWholeStrip(contentWidth: CGFloat) {
+        let strip = StripLayout(
+            columns: (1...8).map { column($0, width: 640) },
+            gap: 8
+        )
+        let scale = strip.overviewScale(forContentWidth: contentWidth)
+        #expect(scale > 0)
+        #expect(scale <= 1)
+        #expect(strip.totalContentWidth * scale <= contentWidth)
+    }
+
+    @Test func overviewScaleNeverMagnifiesWhenStripFits() {
+        // Two columns already fit a wide content area -> no zoom (scale 1).
+        let strip = StripLayout(columns: [column(1, width: 400), column(2, width: 400)], gap: 8)
+        #expect(strip.overviewScale(forContentWidth: 2000) == 1)
+    }
+
+    /// Overview frames live in content-area coordinates and never overlap the sidebar: every
+    /// frame sits within `[0, contentWidth]`, and they preserve the columns' relative order.
+    @Test func overviewFramesStayWithinContentAreaAndPreserveOrder() {
+        let strip = StripLayout(
+            columns: (1...6).map { column($0, width: 640) },
+            gap: 8
+        )
+        let content = CGSize(width: 1000, height: 800)
+        let frames = strip.overviewColumnFrames(in: content)
+        #expect(frames.count == 6)
+        for frame in frames {
+            #expect(frame.frame.minX >= 0)                 // never left of the content origin (no sidebar overlap)
+            #expect(frame.frame.maxX <= content.width + 0.01) // never past the content area
+            #expect(frame.frame.minY >= 0)
+            #expect(frame.frame.maxY <= content.height + 0.01)
+        }
+        // Relative order and scaled positions preserved (each column left of the next).
+        for i in 1..<frames.count {
+            #expect(frames[i].frame.minX > frames[i - 1].frame.minX)
+        }
+        // The scaled column widths are the intrinsic widths times the scale (no per-column squashing).
+        let scale = strip.overviewScale(forContentWidth: content.width)
+        #expect(abs(frames[0].frame.width - 640 * scale) < 0.01)
+    }
+
     // MARK: - Invariant 4: focusWindowDown/Up stays within a column
 
     @Test func focusWindowDownStaysWithinColumn() {
