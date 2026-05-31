@@ -38,8 +38,10 @@ struct StripWorkspaceView: View {
                     appearance: appearance
                 )
                 if stripController.isOverviewActive {
+                    // No fade-in transition: the opaque backdrop must cover the content area
+                    // immediately, otherwise the previously-focused live terminal can flash
+                    // through during the animation while its portal is still being hidden.
                     overviewLayer(in: geo.size)
-                        .transition(.opacity)
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
@@ -52,7 +54,6 @@ struct StripWorkspaceView: View {
             }
             .clipped()
             .contentShape(Rectangle())
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: stripController.isOverviewActive)
             .onAppear { stripController.setViewportWidth(geo.size.width) }
             .onChange(of: geo.size.width) { _, newWidth in
                 stripController.setViewportWidth(newWidth)
@@ -71,7 +72,8 @@ struct StripWorkspaceView: View {
     private func overviewLayer(in size: CGSize) -> some View {
         let frames = stripController.layout.overviewColumnFrames(in: size)
         ZStack(alignment: .topLeading) {
-            Color.black.opacity(0.32)
+            // Near-opaque so any briefly-lingering live terminal portal can't show through.
+            Color(red: 0.10, green: 0.11, blue: 0.13).opacity(0.97)
                 .contentShape(Rectangle())
                 .onTapGesture { stripController.cancelOverview() }
             ForEach(Array(frames.enumerated()), id: \.element.id) { entry in
@@ -95,26 +97,29 @@ struct StripWorkspaceView: View {
     @ViewBuilder
     private func overviewTile(column: StripColumn, index: Int, isSelected: Bool, frame: CGRect) -> some View {
         let title = overviewColumnTitle(column: column, index: index)
-        let thumbnail = stripController.overviewThumbnails[column.id]
+        let windowTexts = stripController.overviewThumbnails[column.id] ?? []
         let accent = Color.accentColor
         // Fixed dark "terminal screen" so the light snapshot text is always readable regardless
         // of the live terminal theme (which previously rendered white-on-white).
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Color(red: 0.07, green: 0.08, blue: 0.10))
-            .overlay(alignment: .topLeading) {
-                if let thumbnail, !thumbnail.isEmpty {
-                    Text(thumbnail)
-                        .font(.system(size: 5.5, weight: .regular, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.72))
-                        .lineLimit(nil)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 20)
-                        .padding(.horizontal, 5)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .clipped()
-                        .allowsHitTesting(false)
+            .overlay(alignment: .top) {
+                // Stacked windows render as a vertical column of mini-screens (top to bottom,
+                // matching the real column), with the active window emphasized.
+                VStack(spacing: 2) {
+                    ForEach(Array(windowTexts.enumerated()), id: \.offset) { entry in
+                        windowMiniScreen(
+                            text: entry.element,
+                            isActiveWindow: entry.offset == column.focusedWindowIndex,
+                            isStacked: windowTexts.count > 1,
+                            accent: accent
+                        )
+                    }
                 }
+                .padding(.top, 18)
+                .padding(.horizontal, 4)
+                .padding(.bottom, 4)
+                .allowsHitTesting(false)
             }
             .overlay(alignment: .top) {
                 HStack(spacing: 6) {
@@ -149,6 +154,32 @@ struct StripWorkspaceView: View {
                 stripController.setOverviewSelection(index)
                 stripController.selectOverviewColumn()
             }
+    }
+
+    /// One window's text snapshot inside an overview tile. When a column is stacked (tabbed),
+    /// each window gets an equal vertical slice and the active one is outlined.
+    @ViewBuilder
+    private func windowMiniScreen(text: String, isActiveWindow: Bool, isStacked: Bool, accent: Color) -> some View {
+        Text(text.isEmpty ? " " : text)
+            .font(.system(size: 5.5, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color.white.opacity(isActiveWindow ? 0.82 : 0.5))
+            .lineLimit(nil)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, 3)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.black.opacity(isStacked ? 0.30 : 0.0))
+            )
+            .overlay(
+                isStacked
+                    ? RoundedRectangle(cornerRadius: 3)
+                        .strokeBorder(isActiveWindow ? accent.opacity(0.9) : Color.white.opacity(0.12),
+                                      lineWidth: isActiveWindow ? 1.5 : 0.5)
+                    : nil
+            )
+            .clipped()
     }
 
     private func overviewColumnTitle(column: StripColumn, index: Int) -> String {

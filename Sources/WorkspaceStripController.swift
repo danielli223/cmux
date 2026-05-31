@@ -45,10 +45,11 @@ final class WorkspaceStripController: ObservableObject {
     /// The column the overview highlight is on. Becomes the focused column when selected.
     @Published private(set) var overviewSelectionIndex = 0
 
-    /// Per-column text thumbnails captured when the overview opens (a snapshot of each focused
-    /// terminal's viewport, keyed by ``StripColumnID``). Rendered as scaled text in the tiles —
-    /// see `docs/niri-mode.md` for why text rather than live/snapshot pixels.
-    @Published private(set) var overviewThumbnails: [StripColumnID: String] = [:]
+    /// Per-column text thumbnails captured when the overview opens, keyed by ``StripColumnID``.
+    /// Each value is one viewport-text snapshot **per stacked window** in the column (top to
+    /// bottom), so a tabbed column shows all its terminals in the overview. Rendered as scaled
+    /// text in the tiles — see `docs/niri-mode.md` for why text rather than live/snapshot pixels.
+    @Published private(set) var overviewThumbnails: [StripColumnID: [String]] = [:]
 
     /// Saved viewport (focused column + scroll offset) captured when the overview opens, so
     /// cancelling returns to the exact prior state.
@@ -215,14 +216,14 @@ final class WorkspaceStripController: ObservableObject {
         isOverviewActive = true
     }
 
-    /// Snapshots each column's focused-window terminal text for the overview tiles.
+    /// Snapshots every stacked window's terminal text per column, for the overview tiles.
     private func captureOverviewThumbnails() {
         guard let bridge else { return }
-        var thumbnails: [StripColumnID: String] = [:]
+        var thumbnails: [StripColumnID: [String]] = [:]
         for column in layout.columns {
-            guard let panelID = column.focusedWindow?.raw else { continue }
-            if let text = bridge.stripCaptureThumbnailText(for: panelID), !text.isEmpty {
-                thumbnails[column.id] = text
+            let texts = column.windows.map { bridge.stripCaptureThumbnailText(for: $0.raw) ?? "" }
+            if texts.contains(where: { !$0.isEmpty }) {
+                thumbnails[column.id] = texts
             }
         }
         overviewThumbnails = thumbnails

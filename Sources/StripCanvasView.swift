@@ -55,7 +55,8 @@ struct StripCanvasView: NSViewControllerRepresentable {
                     isVisibleInUI: isWorkspaceVisible && !stripController.isOverviewActive,
                     portalPriority: workspacePortalPriority,
                     isSplit: stripController.layout.columns.count > 1,
-                    appearance: appearance,
+                    // Dim non-focused columns clearly so the focused one is unmistakable.
+                    appearance: appearance.withStrongerUnfocusedDim(opacity: 0.55),
                     hasUnreadNotification: false,
                     terminalAgentContext: "",
                     onFocus: {
@@ -178,13 +179,16 @@ final class StripCanvasViewController: NSViewController {
                     existing.controller.view.frame = frame
                     didReposition = true
                 }
-                existing.controller.view.isHidden = isOverviewActive
+                // NOTE: do NOT toggle `controller.view.isHidden` for the overview. Hiding the host
+                // view suppresses SwiftUI's pending update pass, so the `isVisibleInUI = false`
+                // rootView change above never reaches the terminal and the GPU portal stays
+                // rendered (the faint terminal "bleed" through the overview backdrop). The portal
+                // is hidden purely via `isVisibleInUI` — the same path workspace-switching uses.
             } else {
                 let controller = NSHostingController(rootView: buildContent(column, isFocused))
                 addChild(controller) // AppKit handles the parent/child lifecycle (no did/willMove)
                 view.addSubview(controller.view)
                 controller.view.frame = frame
-                controller.view.isHidden = isOverviewActive
                 hosts[column.id] = Hosted(controller: controller, contentKey: key)
                 didReposition = true
             }
@@ -200,8 +204,10 @@ final class StripCanvasViewController: NSViewController {
 
         // Translating a column moves the terminal's host view in window space without changing
         // its own frame, so the GPU portal's frame observer never fires. Force every portal in
-        // the window to re-read its anchor frame so terminals follow the column positions.
-        if didReposition, let window = view.window {
+        // the window to re-read its anchor frame so terminals follow the column positions. Skip
+        // while the overview is up: the live portals are hidden there, and re-syncing them can
+        // briefly flash the previously-focused terminal through the dimmed overview.
+        if didReposition, !isOverviewActive, let window = view.window {
             TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: window)
         }
     }

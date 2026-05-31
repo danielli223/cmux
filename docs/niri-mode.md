@@ -83,9 +83,10 @@ cancels and restores the exact prior viewport (focused column + scroll offset). 
 `NSEvent` monitor (installed on hold-start, removed on commit/cancel) drives the release
 detection. The scale transition is animated (spring); its smoothness is a manual-review item.
 
-**Thumbnails — decision:** each tile renders a **text snapshot** of the column's focused terminal
-(its viewport captured via `ghostty_surface_read_text` when the overview opens), drawn as scaled
-monospace text on a dark tile. Rationale: cmux terminals are GPU-portal windows that render above
+**Thumbnails — decision:** each tile renders a **text snapshot** of every window in the column —
+for a tabbed column the windows stack top-to-bottom as mini-screens (the active one outlined),
+matching the real column — captured via `ghostty_surface_read_text` when the overview opens and
+drawn as scaled monospace text on a dark tile. Rationale: cmux terminals are GPU-portal windows that render above
 SwiftUI and **reflow** when their host frame shrinks (the mechanism behind the sliver bug), so a
 live scaled portal doesn't visually shrink; and Ghostty exposes no per-cell colour API, so a true
 pixel snapshot can't be reconstructed for off-screen columns. Reading the cell-text grid works for
