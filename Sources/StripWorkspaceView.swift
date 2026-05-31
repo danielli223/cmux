@@ -1,3 +1,4 @@
+import AppKit
 import Bonsplit
 import CmuxStripLayout
 import SwiftUI
@@ -5,17 +6,18 @@ import SwiftUI
 /// Renders a ``Workspace`` as a niri-style scrollable strip when its
 /// ``WorkspaceStripController`` is in ``WorkspaceLayoutMode/strip``.
 ///
-/// Columns are positioned at the absolute frames produced by the pure
-/// ``StripLayout/columnFrames(in:)`` — laid out left-to-right at their intrinsic widths and
-/// panned by the scroll offset. Each column renders its vertically-stacked terminal windows
-/// with the same ``PanelContentView`` the Bonsplit renderer uses, so terminal hosting,
-/// portals, and focus all work unchanged. Off-screen columns stay alive (their terminal
-/// processes keep running) but their portal rendering is gated via `isVisibleInUI`, the
-/// documented "live but throttle off-screen rendering" default (see `docs/kb/mapping.md`).
+/// Columns are laid out at the absolute frames produced by the pure
+/// ``StripLayout/columnFrames(in:)``. **Crucially, the terminals are hosted in an AppKit
+/// canvas (``StripCanvasNSView``) — one `NSHostingController` per column positioned by frame,
+/// the same hosting shape Bonsplit uses.** An earlier SwiftUI `.position()` layout made cmux's
+/// terminal portal clamp every surface to a tiny ancestor's bounds, rendering terminals as
+/// one-character slivers (the portal walks the superview chain intersecting bounds, and
+/// `.position()` containers size to the position point, not the column). Hosting each column as
+/// a full-frame AppKit subview gives the portal the real column rectangle.
 ///
-/// The view contains **no layout math** — all geometry comes from the model — and the
-/// `ForEach` is eager (inside a `ZStack`, not a `Lazy*` container), avoiding the
-/// `LazyLayoutViewCache` thrash that the snapshot-boundary rule guards against.
+/// Tabbed columns: a column shows only its **focused** window at full height; the others stay
+/// alive but hidden, switched with `focus-window up/down`, with a tab indicator. Column widths
+/// derive from the live content area (see ``WorkspaceStripController/newColumnWidth``).
 struct StripWorkspaceView: View {
     @ObservedObject var workspace: Workspace
     @ObservedObject var stripController: WorkspaceStripController
@@ -26,32 +28,23 @@ struct StripWorkspaceView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let viewport = CGRect(origin: .zero, size: geo.size)
-            let frames = stripController.layout.columnFrames(in: viewport)
-            ZStack(alignment: .topLeading) {
-                Color.clear
-                ForEach(Array(frames.enumerated()), id: \.element.id) { entry in
-                    let columnFrame = entry.element
-                    let columnIndex = entry.offset
-                    if stripController.layout.columns.indices.contains(columnIndex) {
-                        columnView(
-                            column: stripController.layout.columns[columnIndex],
-                            isColumnFocused: columnIndex == stripController.layout.focusedColumnIndex,
-                            frame: columnFrame.frame,
-                            isVisible: columnFrame.isVisible
-                        )
-                    }
-                }
-            }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-            .clipped()
-            .contentShape(Rectangle())
-            .overlay {
+            ZStack {
+                StripCanvasView(
+                    workspace: workspace,
+                    stripController: stripController,
+                    isWorkspaceVisible: isWorkspaceVisible,
+                    isWorkspaceInputActive: isWorkspaceInputActive,
+                    workspacePortalPriority: workspacePortalPriority,
+                    appearance: appearance
+                )
                 if stripController.isOverviewActive {
                     overviewLayer(in: geo.size)
                         .transition(.opacity)
                 }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .clipped()
+            .contentShape(Rectangle())
             .animation(.spring(response: 0.32, dampingFraction: 0.86), value: stripController.isOverviewActive)
             .onAppear { stripController.setViewportWidth(geo.size.width) }
             .onChange(of: geo.size.width) { _, newWidth in
@@ -64,15 +57,14 @@ struct StripWorkspaceView: View {
     // MARK: - Overview (zoom-out) rendering
 
     /// The niri-style overview: the whole strip scaled down to fit the content area, with one
-    /// tile per column and a highlight on the selected one. Tiles are lightweight (background
-    /// + title + tab-count indicator), not live or snapshot terminal pixels — see the type doc
-    /// and `docs/niri-mode.md` for the rationale. Clicking a tile selects that column.
+    /// tile per column and a highlight on the selected one. Tiles show each column's background,
+    /// title, and (for tabbed columns) a tab-count indicator — see `docs/niri-mode.md` for why
+    /// these are tiles rather than live/snapshot terminal pixels. Clicking a tile selects it.
     @ViewBuilder
     private func overviewLayer(in size: CGSize) -> some View {
         let frames = stripController.layout.overviewColumnFrames(in: size)
         ZStack(alignment: .topLeading) {
-            // Dimmed backdrop so the zoomed-out tiles read as a distinct mode.
-            Color.black.opacity(0.28)
+            Color.black.opacity(0.32)
                 .contentShape(Rectangle())
                 .onTapGesture { stripController.cancelOverview() }
             ForEach(Array(frames.enumerated()), id: \.element.id) { entry in
@@ -109,16 +101,12 @@ struct StripWorkspaceView: View {
                         .lineLimit(1)
                         .foregroundStyle(.white.opacity(0.92))
                     if column.windows.count > 1 {
-                        // Tabbed/stacked column: show the window count + active index.
-                        Text(String(
-                            localized: "niri.overview.tabIndicator",
-                            defaultValue: "\(column.focusedWindowIndex + 1)/\(column.windows.count)"
-                        ))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(.white.opacity(0.16)))
+                        Text("\(column.focusedWindowIndex + 1)/\(column.windows.count)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(.white.opacity(0.16)))
                     }
                 }
                 .padding(.top, 8)
@@ -134,88 +122,17 @@ struct StripWorkspaceView: View {
     }
 
     private func overviewColumnTitle(column: StripColumn, index: Int) -> String {
-        if let panelID = column.windows.first?.raw,
+        if let panelID = column.focusedWindow?.raw ?? column.windows.first?.raw,
            let panel = workspace.panels[panelID] {
             let title = panel.displayTitle
             if !title.isEmpty { return title }
         }
         return String(localized: "niri.overview.columnFallback", defaultValue: "Column \(index + 1)")
     }
-
-    /// Renders one column: its vertically-stacked terminal windows at the column's frame.
-    @ViewBuilder
-    private func columnView(
-        column: StripColumn,
-        isColumnFocused: Bool,
-        frame: CGRect,
-        isVisible: Bool
-    ) -> some View {
-        let windowCount = max(column.windows.count, 1)
-        let windowHeight = frame.height / CGFloat(windowCount)
-        VStack(spacing: 0) {
-            ForEach(Array(column.windows.enumerated()), id: \.element.raw) { windowEntry in
-                let windowIndex = windowEntry.offset
-                let panelID = windowEntry.element.raw
-                let isWindowFocused = isColumnFocused && windowIndex == column.focusedWindowIndex
-                windowView(panelID: panelID, isFocused: isWindowFocused, isVisible: isVisible)
-                    .frame(height: windowHeight)
-            }
-        }
-        .frame(width: frame.width, height: frame.height)
-        .position(x: frame.midX, y: frame.midY)
-    }
-
-    /// Renders a single terminal window (one panel) inside a column.
-    @ViewBuilder
-    private func windowView(panelID: UUID, isFocused: Bool, isVisible: Bool) -> some View {
-        if let panel = workspace.panels[panelID],
-           let paneId = workspace.stripPaneId(forPanel: panelID) {
-            PanelContentView(
-                panel: panel,
-                workspaceId: workspace.id,
-                paneId: paneId,
-                isFocused: isWorkspaceInputActive && isFocused,
-                isSelectedInPane: true,
-                // Hide the live terminal portals while the overview is up so its tiles aren't
-                // covered by the GPU portal layer (terminals keep running; only rendering is gated).
-                isVisibleInUI: isWorkspaceVisible && isVisible && !stripController.isOverviewActive,
-                portalPriority: workspacePortalPriority,
-                isSplit: stripController.layout.columns.count > 1,
-                appearance: appearance,
-                hasUnreadNotification: false,
-                terminalAgentContext: "",
-                onFocus: {
-                    guard isWorkspaceInputActive else { return }
-                    guard workspace.panels[panelID] != nil else { return }
-                    workspace.focusPanel(panelID, trigger: .terminalFirstResponder)
-                },
-                onRequestPanelFocus: {
-                    guard isWorkspaceInputActive else { return }
-                    guard workspace.panels[panelID] != nil else { return }
-                    workspace.focusPanel(panelID)
-                },
-                onResumeAgentHibernation: {
-                    guard isWorkspaceInputActive else { return }
-                    guard workspace.panels[panelID] != nil else { return }
-                    workspace.resumeAgentHibernation(panelId: panelID, focus: true)
-                },
-                onAutoResumeAgentHibernation: {
-                    guard isWorkspaceInputActive else { return }
-                    guard workspace.panels[panelID] != nil else { return }
-                    workspace.resumeAgentHibernation(panelId: panelID, focus: false)
-                },
-                onTriggerFlash: { workspace.triggerDebugFlash(panelId: panelID) }
-            )
-        } else {
-            Color.clear
-        }
-    }
 }
 
 /// An AppKit-backed transparent overlay that turns continuous two-finger trackpad scrolling
 /// into strip panning (with snap-to-column on gesture end), matching niri's touchpad gesture.
-/// Discrete wheel ticks and keyboard navigation drive focus changes elsewhere; this view owns
-/// only the continuous pixel-pan.
 private struct StripScrollCatcher: NSViewRepresentable {
     let stripController: WorkspaceStripController
 
@@ -237,19 +154,16 @@ final class StripScrollCatcherView: NSView {
     override var acceptsFirstResponder: Bool { false }
 
     override func scrollWheel(with event: NSEvent) {
-        guard let stripController, stripController.isStripMode else {
+        guard let stripController, stripController.isStripMode, !stripController.isOverviewActive else {
             super.scrollWheel(with: event)
             return
         }
-        // Only treat predominantly-horizontal scrolls as strip pans; vertical scroll falls
-        // through to the focused terminal.
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
         guard abs(dx) > abs(dy) else {
             super.scrollWheel(with: event)
             return
         }
-        // Natural scrolling: swiping content left (negative dx) reveals columns to the right.
         stripController.panBy(-dx)
         if event.phase == .ended || event.momentumPhase == .ended {
             stripController.snapScroll()

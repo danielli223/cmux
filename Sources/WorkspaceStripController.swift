@@ -28,8 +28,10 @@ final class WorkspaceStripController: ObservableObject {
     /// Seeded with a reasonable default so socket-driven ops before first layout still work.
     private(set) var viewportWidth: CGFloat = 1200
 
-    /// The intrinsic width assigned to newly opened columns.
-    var newColumnWidth: CGFloat = StripLayout.defaultColumnWidth
+    /// The intrinsic width assigned to newly opened columns: **half the content area**, derived
+    /// from the live viewport width so two columns fill the visible space and the third begins
+    /// the horizontal scroll. Never a hardcoded constant.
+    var newColumnWidth: CGFloat { max(320, (viewportWidth / 2).rounded()) }
 
     /// Whether niri-mode is currently active.
     var isStripMode: Bool { mode == .strip }
@@ -54,9 +56,18 @@ final class WorkspaceStripController: ObservableObject {
     /// the scroll offset to it. Called from an action/`onChange`, never from `body` math.
     /// - Parameter width: The viewport width in points.
     func setViewportWidth(_ width: CGFloat) {
-        guard width > 0, width != viewportWidth else { return }
+        guard width > 0 else { return }
+        let old = viewportWidth
+        guard width != old else { return }
         viewportWidth = width
-        layout.setScrollOffset(layout.scrollOffset, viewportWidth: width)
+        // Columns track the content area: rescale their widths by the size ratio so they keep
+        // their fraction of the content (e.g. half each) across window/sidebar resizes.
+        if old > 0, isStripMode {
+            layout.rescaleColumnWidths(by: width / old)
+            layout.revealFocusedColumnForViewport(width)
+        } else {
+            layout.setScrollOffset(layout.scrollOffset, viewportWidth: width)
+        }
     }
 
     // MARK: - Mode toggle

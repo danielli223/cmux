@@ -381,6 +381,17 @@ public struct StripLayout: Equatable, Sendable, Codable {
         scrollOffset = max(0, offset)
     }
 
+    /// Scales every column's intrinsic width by `factor` — e.g. on a window/content-area resize
+    /// so columns keep their fraction of the content (each stays "half the content area"). A
+    /// no-op for a non-positive or non-finite factor.
+    /// - Parameter factor: The multiplicative size ratio (`newContentWidth / oldContentWidth`).
+    public mutating func rescaleColumnWidths(by factor: CGFloat) {
+        guard factor > 0, factor.isFinite, !columns.isEmpty else { return }
+        for index in columns.indices {
+            columns[index].width = max(80, columns[index].width * factor)
+        }
+    }
+
     /// Directly sets the scroll offset (e.g. from a continuous trackpad pan), clamped to the
     /// valid range for `viewportWidth`. Does not change focus.
     /// - Parameters:
