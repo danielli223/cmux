@@ -149,6 +149,7 @@ final class StripCanvasViewController: NSViewController {
         let viewport = CGRect(origin: .zero, size: view.bounds.size)
         let frames = layout.columnFrames(in: viewport)
         var live: Set<StripColumnID> = []
+        var didReposition = false
 
         for (index, column) in layout.columns.enumerated() {
             guard frames.indices.contains(index) else { continue }
@@ -173,7 +174,10 @@ final class StripCanvasViewController: NSViewController {
                     existing.contentKey = key
                     hosts[column.id] = existing
                 }
-                existing.controller.view.frame = frame
+                if existing.controller.view.frame != frame {
+                    existing.controller.view.frame = frame
+                    didReposition = true
+                }
                 existing.controller.view.isHidden = isOverviewActive
             } else {
                 let controller = NSHostingController(rootView: buildContent(column, isFocused))
@@ -182,6 +186,7 @@ final class StripCanvasViewController: NSViewController {
                 controller.view.frame = frame
                 controller.view.isHidden = isOverviewActive
                 hosts[column.id] = Hosted(controller: controller, contentKey: key)
+                didReposition = true
             }
         }
 
@@ -190,6 +195,14 @@ final class StripCanvasViewController: NSViewController {
             hosted.controller.view.removeFromSuperview()
             hosted.controller.removeFromParent()
             hosts.removeValue(forKey: id)
+            didReposition = true
+        }
+
+        // Translating a column moves the terminal's host view in window space without changing
+        // its own frame, so the GPU portal's frame observer never fires. Force every portal in
+        // the window to re-read its anchor frame so terminals follow the column positions.
+        if didReposition, let window = view.window {
+            TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: window)
         }
     }
 }
