@@ -3002,6 +3002,9 @@ class TerminalController {
         case "niri_close":
             return niriAction(.close)
 
+        case "niri_fullscreen":
+            return niriFullscreen(args)
+
         case "niri_overview":
             return niriOverview(args)
 
@@ -17470,6 +17473,27 @@ class TerminalController {
             default: return "ERROR: Invalid direction. Use left, right, up, or down."
             }
             return "OK"
+        }
+    }
+
+    /// `niri_fullscreen <on|off|toggle>` — fullscreen the focused column (fill the viewport),
+    /// the niri-mode equivalent of pane-zoom. Mirrors the `Toggle Pane Zoom` shortcut, which
+    /// routes here while the strip is active.
+    private func niriFullscreen(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "on", "enable", "true":
+                if !controller.isColumnFullscreen { controller.toggleColumnFullscreen() }
+            case "off", "disable", "false":
+                if controller.isColumnFullscreen { controller.toggleColumnFullscreen() }
+            case "toggle", "":
+                controller.toggleColumnFullscreen()
+            default:
+                return "ERROR: Invalid arg. Use on, off, or toggle."
+            }
+            return "OK \(controller.isColumnFullscreen ? "fullscreen" : "strip")"
         }
     }
 

@@ -27,6 +27,7 @@ struct StripCanvasView: NSViewControllerRepresentable {
         controller.sync(
             layout: stripController.layout,
             isOverviewActive: stripController.isOverviewActive,
+            isColumnFullscreen: stripController.isColumnFullscreen,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
             buildContent: { column, isColumnFocused in
@@ -51,8 +52,11 @@ struct StripCanvasView: NSViewControllerRepresentable {
                     isSelectedInPane: true,
                     // Hide the live terminal portals while the overview is up (the portal is a
                     // window-level layer above SwiftUI, so it would otherwise show through the
-                    // dimmed overview). Terminals keep running; only rendering is gated.
-                    isVisibleInUI: isWorkspaceVisible && !stripController.isOverviewActive,
+                    // dimmed overview). Terminals keep running; only rendering is gated. When a
+                    // column is fullscreened, the non-focused columns are likewise hidden so only
+                    // the expanded column's portal renders.
+                    isVisibleInUI: isWorkspaceVisible && !stripController.isOverviewActive
+                        && (!stripController.isColumnFullscreen || isColumnFocused),
                     portalPriority: workspacePortalPriority,
                     isSplit: stripController.layout.columns.count > 1,
                     // Dim non-focused columns clearly so the focused one is unmistakable.
@@ -126,36 +130,110 @@ final class StripCanvasViewController: NSViewController {
 
     private var hosts: [StripColumnID: Hosted] = [:]
 
+    /// The most recent ``sync(layout:...)`` inputs, retained so ``viewDidLayout()`` can re-run the
+    /// layout against the canvas's *current* bounds. Without this, a bounds change that does not
+    /// originate from a SwiftUI update — most importantly the macOS full-screen enter/exit, where
+    /// AppKit reparents and resizes the content view — would never re-flow the columns, leaving
+    /// them sized to the pre-transition viewport (the "dimensions bug out on full screen" report).
+    private var lastSync: SyncInputs?
+
+    private struct SyncInputs {
+        let layout: StripLayout
+        let isOverviewActive: Bool
+        let isColumnFullscreen: Bool
+        let isWorkspaceInputActive: Bool
+        let isWorkspaceVisible: Bool
+        let buildContent: (StripColumn, Bool) -> AnyView
+    }
+
     override func loadView() {
         let canvas = StripCanvasNSView()
         canvas.wantsLayer = true
         canvas.layer?.masksToBounds = true
+        // Paint the canvas the terminal background color. A column pan moves the host views
+        // immediately but the GPU terminal portals re-read their frames one runloop tick later;
+        // for that single frame the canvas shows through behind/beside a column. With no backing
+        // color that gap flashes whatever SwiftUI sits underneath (often light) — the "flash that
+        // hurts" on every scroll. A dark terminal-matched fill makes the transient gap invisible.
+        canvas.layer?.backgroundColor = GhosttyBackgroundTheme.currentColor().cgColor
         view = canvas
+    }
+
+    /// Re-flows the columns against the canvas's current bounds whenever AppKit lays the view out
+    /// (window resize, sidebar toggle, full-screen enter/exit). Reuses the last ``sync`` inputs so
+    /// the render never lags behind a bounds change that did not come through SwiftUI.
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        if let lastSync { reconcile(lastSync) }
     }
 
     /// Reconciles the hosted column views with the current ``StripLayout``.
     /// - Parameters:
     ///   - layout: The current strip model.
     ///   - isOverviewActive: When true, hide the live terminals (the overview tiles cover them).
+    ///   - isColumnFullscreen: When true, the focused column fills the viewport and the others are
+    ///     parked off-screen with their portals hidden.
     ///   - isWorkspaceInputActive: Whether this workspace has keyboard focus.
     ///   - isWorkspaceVisible: Whether this workspace is visible.
     ///   - buildContent: Builds a column's SwiftUI content; the `Bool` is whether it is focused.
     func sync(
         layout: StripLayout,
         isOverviewActive: Bool,
+        isColumnFullscreen: Bool,
         isWorkspaceInputActive: Bool,
         isWorkspaceVisible: Bool,
-        buildContent: (StripColumn, Bool) -> AnyView
+        buildContent: @escaping (StripColumn, Bool) -> AnyView
     ) {
+        let inputs = SyncInputs(
+            layout: layout,
+            isOverviewActive: isOverviewActive,
+            isColumnFullscreen: isColumnFullscreen,
+            isWorkspaceInputActive: isWorkspaceInputActive,
+            isWorkspaceVisible: isWorkspaceVisible,
+            buildContent: buildContent
+        )
+        lastSync = inputs
+        reconcile(inputs)
+    }
+
+    /// Positions every column host from `inputs` against the canvas's live `view.bounds`, rebuilds
+    /// content whose identity changed, and re-syncs the terminal portals. Idempotent: safe to call
+    /// from both ``sync`` and ``viewDidLayout()``.
+    private func reconcile(_ inputs: SyncInputs) {
+        let layout = inputs.layout
+        let isOverviewActive = inputs.isOverviewActive
+        let isColumnFullscreen = inputs.isColumnFullscreen
+        let buildContent = inputs.buildContent
         let viewport = CGRect(origin: .zero, size: view.bounds.size)
         let frames = layout.columnFrames(in: viewport)
         var live: Set<StripColumnID> = []
         var didReposition = false
 
+        // Keep the gap-filling backdrop matched to the live terminal theme.
+        view.layer?.backgroundColor = GhosttyBackgroundTheme.currentColor().cgColor
+
+        // Move every column host within one transaction with implicit animations disabled, so a
+        // pan snaps all columns to their new positions in a single frame instead of letting the
+        // layer-backed hosts ease independently (which reads as a smear/flicker during the pan).
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
         for (index, column) in layout.columns.enumerated() {
             guard frames.indices.contains(index) else { continue }
-            let frame = frames[index].frame
             let isFocused = index == layout.focusedColumnIndex
+            // When a column is fullscreened, the focused column takes the whole viewport and the
+            // rest are parked off-screen (their portals are also hidden via `isVisibleInUI`); a
+            // strip-space x keeps them laid out but fully outside the visible canvas.
+            let frame: CGRect
+            if isColumnFullscreen {
+                frame = isFocused
+                    ? viewport
+                    : CGRect(x: -(viewport.width + column.width + 200), y: 0,
+                             width: column.width, height: viewport.height)
+            } else {
+                frame = frames[index].frame
+            }
             // Rebuild the hosted SwiftUI only when content identity changes — NOT on scroll
             // (which changes only the frame). Focus / input-active / visibility are included so
             // the focus ring and portal visibility stay correct; none of them change on scroll.
@@ -163,9 +241,10 @@ final class StripCanvasViewController: NSViewController {
                 column.focusedWindow?.raw.uuidString ?? "none",
                 String(column.windows.count),
                 isFocused ? "f" : "-",
-                isWorkspaceInputActive ? "a" : "-",
-                isWorkspaceVisible ? "v" : "-",
+                inputs.isWorkspaceInputActive ? "a" : "-",
+                inputs.isWorkspaceVisible ? "v" : "-",
                 isOverviewActive ? "o" : "-", // toggling overview flips isVisibleInUI -> rebuild
+                isColumnFullscreen ? "z" : "-", // toggling fullscreen flips isVisibleInUI -> rebuild
             ].joined(separator: "|")
             live.insert(column.id)
 

@@ -36,6 +36,13 @@ final class WorkspaceStripController: ObservableObject {
     /// Whether niri-mode is currently active.
     var isStripMode: Bool { mode == .strip }
 
+    /// Whether the focused column is temporarily expanded to fill the whole viewport — the
+    /// niri-mode equivalent of "fullscreen / zoom a pane". A pure render state: it does not
+    /// change any column ``StripColumn/width`` in the model, so toggling it off restores the
+    /// strip exactly. Cleared by any focus/structural change (and by the overview), so it never
+    /// outlives the column it was opened on.
+    @Published private(set) var isColumnFullscreen = false
+
     // MARK: - Overview (zoom-out) state
 
     /// Whether the niri-style overview (zoom-out) is currently showing. A render + input mode
@@ -110,6 +117,7 @@ final class WorkspaceStripController: ObservableObject {
     func disableStripMode() {
         guard mode != .tiling else { return }
         isOverviewActive = false
+        isColumnFullscreen = false
         mode = .tiling
     }
 
@@ -126,6 +134,7 @@ final class WorkspaceStripController: ObservableObject {
     @discardableResult
     func openColumn() -> UUID? {
         guard mode == .strip, let bridge else { return nil }
+        clearColumnFullscreen()
         let afterPanel = layout.focusedColumn?.focusedWindow?.raw
         guard let newPanelID = bridge.stripCreateColumnTerminal(after: afterPanel) else { return nil }
         let column = StripColumn(
@@ -145,6 +154,7 @@ final class WorkspaceStripController: ObservableObject {
     func openStackedWindow() -> UUID? {
         guard mode == .strip, let bridge,
               let belowPanel = layout.focusedColumn?.focusedWindow?.raw else { return nil }
+        clearColumnFullscreen()
         guard let newPanelID = bridge.stripCreateStackedTerminal(below: belowPanel) else { return nil }
         layout.appendWindowToFocusedColumn(StripWindowID(newPanelID))
         bridge.stripFocusPanel(newPanelID)
@@ -157,6 +167,7 @@ final class WorkspaceStripController: ObservableObject {
         guard mode == .strip, let bridge,
               var column = layout.focusedColumn,
               let panelID = column.focusedWindow?.raw else { return }
+        clearColumnFullscreen()
         bridge.stripClosePanel(panelID)
         if column.windows.count <= 1 {
             layout.removeFocusedColumn(viewportWidth: viewportWidth)
@@ -172,11 +183,32 @@ final class WorkspaceStripController: ObservableObject {
         }
     }
 
+    // MARK: - Fullscreen (zoom a column)
+
+    /// Toggles "fullscreen the focused column": the focused column renders at the full viewport,
+    /// covering its neighbours, until toggled off or any other action clears it. This is the
+    /// niri-mode answer to cmux's pane-zoom (`toggleSplitZoom`) — in strip mode the Bonsplit
+    /// tree is dormant, so the shared zoom action routes here instead of resizing a dead pane.
+    /// - Returns: `true` if the state changed (always, while a focused column exists).
+    @discardableResult
+    func toggleColumnFullscreen() -> Bool {
+        guard mode == .strip, !isOverviewActive, layout.focusedColumn != nil else { return false }
+        isColumnFullscreen.toggle()
+        return true
+    }
+
+    /// Clears the fullscreen-column state if set. Called by every focus/structural action so the
+    /// expansion never lingers on a column the user has navigated away from.
+    private func clearColumnFullscreen() {
+        if isColumnFullscreen { isColumnFullscreen = false }
+    }
+
     // MARK: - Focus & movement
 
     /// Moves column focus left/right, pans to reveal, and focuses the landing panel.
     func focusColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
+        clearColumnFullscreen()
         if layout.focusColumn(direction, viewportWidth: viewportWidth) {
             syncFocusToModel()
         }
@@ -185,6 +217,7 @@ final class WorkspaceStripController: ObservableObject {
     /// Moves window focus up/down within the focused column and focuses the landing panel.
     func focusWindow(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
+        clearColumnFullscreen()
         if layout.focusWindow(direction) {
             syncFocusToModel()
         }
@@ -193,6 +226,7 @@ final class WorkspaceStripController: ObservableObject {
     /// Reorders the focused column left/right on the strip; widths unchanged; viewport follows.
     func moveColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
+        clearColumnFullscreen()
         layout.moveColumn(direction, viewportWidth: viewportWidth)
     }
 
@@ -209,6 +243,7 @@ final class WorkspaceStripController: ObservableObject {
     /// cancel restores them exactly. The highlight starts on the focused column.
     func enterOverview() {
         guard mode == .strip, !isOverviewActive, !layout.columns.isEmpty else { return }
+        clearColumnFullscreen()
         savedFocusBeforeOverview = layout.focusedColumnIndex
         savedOffsetBeforeOverview = layout.scrollOffset
         overviewSelectionIndex = layout.focusedColumnIndex
@@ -361,6 +396,7 @@ final class WorkspaceStripController: ObservableObject {
             "totalContentWidth": Double(layout.totalContentWidth),
             "focusedColumnIndex": layout.focusedColumnIndex,
             "overviewActive": isOverviewActive,
+            "columnFullscreen": isColumnFullscreen,
             "overviewSelectionIndex": overviewSelectionIndex,
             "overviewThumbnailCount": overviewThumbnails.count,
             "columns": columns,

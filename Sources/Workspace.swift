@@ -14935,6 +14935,13 @@ final class Workspace: Identifiable, ObservableObject {
 
     @discardableResult
     func toggleSplitZoom(panelId: UUID) -> Bool {
+        // In niri-mode the Bonsplit tree is dormant; pane-zoom maps to fullscreening the focused
+        // strip column instead of zooming a dead pane (which would thrash portal visibility
+        // against the unrendered Bonsplit layout). One shared entry point so the keyboard
+        // shortcut, command palette, surface command, and CLI all get the strip behavior.
+        if stripController.isStripMode {
+            return stripController.toggleColumnFullscreen()
+        }
         let wasSplitZoomed = bonsplitController.isSplitZoomed
         guard let paneId = paneId(forPanelId: panelId) else { return false }
         guard bonsplitController.togglePaneZoom(inPane: paneId) else { return false }

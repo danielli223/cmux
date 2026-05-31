@@ -46,6 +46,12 @@ in any mode; the rest act only while the strip is active.
 > word-movement, which register *global* hotkeys that steal the event before cmux's app-level
 > shortcut monitor — making arrow-based focus unreliable. Letters avoid all of those.
 | ⌃⌥V (hold) | Hold-to-preview overview (zoom out) | `shortcut.niriToggleOverview` |
+| ⌘⇧↩ | Fullscreen the focused column (pane-zoom) | `shortcut.togglePaneZoom` |
+
+The pane-zoom shortcut (`Toggle Pane Zoom`) is **shared with tiling mode**: while the strip is
+active it expands the focused column to fill the viewport instead of zooming a Bonsplit pane (the
+tree is dormant in strip mode). It is a pure render state — no column changes width — and any
+focus/structural change or opening the overview clears it.
 
 These do not collide with the reserved bindings (⌘D, ⌘⇧D, ⌃Tab, ⌘⇧[ / ⌘⇧], ⌥⌘+arrows).
 
@@ -103,12 +109,13 @@ selected workspace.
 | Command | Effect |
 | --- | --- |
 | `niri_mode <on\|off\|toggle>` | Enable/disable the strip; returns `OK <mode>` |
-| `niri_status` | JSON: `mode`, `viewportWidth`, `scrollOffset`, `totalContentWidth`, `focusedColumnIndex`, and per-column `id`/`width`/`x`/`focused`/`windowPanelIds` |
+| `niri_status` | JSON: `mode`, `viewportWidth`, `scrollOffset`, `totalContentWidth`, `focusedColumnIndex`, `columnFullscreen`, and per-column `id`/`width`/`x`/`focused`/`windowPanelIds` |
 | `niri_open` | Open a terminal in a new column after the focused one; returns `OK <panelId>` |
 | `niri_open_stacked` | Open a terminal stacked below the focused window |
 | `niri_focus <left\|right\|up\|down>` | Focus a column (left/right) or window in the column (up/down) |
 | `niri_move <left\|right>` | Reorder the focused column |
 | `niri_close` | Close the focused column's focused window |
+| `niri_fullscreen <on\|off\|toggle>` | Fullscreen the focused column (pane-zoom); returns `OK <fullscreen\|strip>` |
 | `niri_overview <on\|off\|toggle>` | Open/close the zoom-out overview |
 | `niri_overview_move <left\|right>` | Move the overview highlight |
 | `niri_overview_select` | Select the highlighted column and close the overview |

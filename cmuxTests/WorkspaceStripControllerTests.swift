@@ -174,6 +174,59 @@ import Testing
         #expect(bridge.livePanels.count == 1) // nothing created or closed
     }
 
+    // MARK: - Fullscreen (zoom a column)
+
+    @Test func toggleColumnFullscreenFlipsStateWhenInStripMode() {
+        let (controller, _) = makeController(seed: [UUID()])
+        controller.enableStripMode()
+        controller.openColumn() // 2 columns, focus index 1
+        #expect(controller.isColumnFullscreen == false)
+        #expect(controller.toggleColumnFullscreen() == true)
+        #expect(controller.isColumnFullscreen == true)
+        #expect(controller.toggleColumnFullscreen() == true)
+        #expect(controller.isColumnFullscreen == false)
+    }
+
+    @Test func fullscreenDoesNotResizeAnyColumn() {
+        let (controller, _) = makeController(seed: [UUID()])
+        controller.enableStripMode()
+        controller.openColumn()
+        controller.openColumn() // 3 columns
+        let widthsBefore = controller.layout.columns.map(\.width)
+        controller.toggleColumnFullscreen()
+        // Fullscreen is a pure render state: the model's column widths are untouched, so toggling
+        // it off restores the strip exactly (the render expands the focused column, not the model).
+        #expect(controller.layout.columns.map(\.width) == widthsBefore)
+        controller.toggleColumnFullscreen()
+        #expect(controller.layout.columns.map(\.width) == widthsBefore)
+    }
+
+    @Test func focusMoveClearsFullscreen() {
+        let (controller, _) = makeController(seed: [UUID()])
+        controller.enableStripMode()
+        controller.openColumn() // 2 columns, focus index 1
+        controller.toggleColumnFullscreen()
+        #expect(controller.isColumnFullscreen == true)
+        controller.focusColumn(.left) // navigating away must drop the expansion
+        #expect(controller.isColumnFullscreen == false)
+    }
+
+    @Test func enteringOverviewClearsFullscreen() {
+        let (controller, _) = makeOverflowingStrip()
+        controller.toggleColumnFullscreen()
+        #expect(controller.isColumnFullscreen == true)
+        controller.enterOverview()
+        #expect(controller.isColumnFullscreen == false)
+        #expect(controller.isOverviewActive == true)
+    }
+
+    @Test func fullscreenInertWhenNotInStripMode() {
+        let (controller, _) = makeController(seed: [UUID()])
+        // Mode is .tiling (never enabled): the toggle reports no change and stays off.
+        #expect(controller.toggleColumnFullscreen() == false)
+        #expect(controller.isColumnFullscreen == false)
+    }
+
     // MARK: - Overview (zoom-out)
 
     /// Build an overflowing strip (several columns, narrow viewport) focused mid-strip.

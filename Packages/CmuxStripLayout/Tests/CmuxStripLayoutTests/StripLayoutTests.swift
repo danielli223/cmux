@@ -163,6 +163,38 @@ import Testing
         #expect(strip.scrollOffset > 0)
     }
 
+    /// Regression for the user-reported "move right puts the selected terminal on the left" bug:
+    /// when the strip is parked at a **non-column-boundary** offset (e.g. mid two-finger pan),
+    /// focusing right to a column that is only *partially* visible on the right must pan the
+    /// minimum amount so that column lands fully visible at the **trailing** edge — its
+    /// predecessor stays on the left for context. The broken behavior snapped the focused column
+    /// to the **leading** edge (alone on the left), which is what the report showed.
+    @Test func focusColumnRightFromNonBoundaryOffsetKeepsPredecessorVisible() {
+        // 4 columns, 600 wide, gap 0, viewport 1200 -> exactly two fit. Boundaries: 0/600/1200/1800.
+        var strip = StripLayout(
+            columns: (1...4).map { column($0, width: 600) },
+            focusedColumnIndex: 1
+        )
+        // Park at a non-boundary offset, as a continuous trackpad pan leaves it before snapping.
+        strip.setScrollOffset(300, viewportWidth: 1200)
+        #expect(strip.scrollOffset == 300) // confirm we start off a column boundary
+
+        // Focus right: column 2 (strip-x 1200) is only partially visible on the right.
+        #expect(strip.focusColumn(.right, viewportWidth: 1200) == true)
+        #expect(strip.focusedColumnIndex == 2)
+
+        // It must pan to the boundary that keeps column 1 on the left (600), NOT to column 2's own
+        // left edge (1200), which would strand the focused column alone at the leading edge.
+        #expect(strip.scrollOffset == strip.columnLeftEdge(1)) // == 600
+        #expect(strip.scrollOffset != strip.columnLeftEdge(2)) // != 1200 (the bug)
+
+        let frames = strip.columnFrames(in: CGRect(x: 0, y: 0, width: 1200, height: 1000))
+        #expect(frames[1].isVisible == true)           // predecessor stays on screen (left)
+        #expect(frames[2].isVisible == true)            // focused column fully visible (right)
+        #expect(frames[2].frame.minX > 0)               // focused column is NOT at the leading edge
+        #expect(frames[2].frame.maxX <= 1200)           // and not clipped on the right
+    }
+
     @Test func focusColumnAtEdgeReturnsFalseAndDoesNotMove() {
         var strip = threeColumns()
         #expect(strip.focusColumn(.left, viewportWidth: 800) == false)
