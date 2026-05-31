@@ -45,6 +45,11 @@ final class WorkspaceStripController: ObservableObject {
     /// The column the overview highlight is on. Becomes the focused column when selected.
     @Published private(set) var overviewSelectionIndex = 0
 
+    /// Per-column text thumbnails captured when the overview opens (a snapshot of each focused
+    /// terminal's viewport, keyed by ``StripColumnID``). Rendered as scaled text in the tiles —
+    /// see `docs/niri-mode.md` for why text rather than live/snapshot pixels.
+    @Published private(set) var overviewThumbnails: [StripColumnID: String] = [:]
+
     /// Saved viewport (focused column + scroll offset) captured when the overview opens, so
     /// cancelling returns to the exact prior state.
     private var savedFocusBeforeOverview = 0
@@ -206,7 +211,21 @@ final class WorkspaceStripController: ObservableObject {
         savedFocusBeforeOverview = layout.focusedColumnIndex
         savedOffsetBeforeOverview = layout.scrollOffset
         overviewSelectionIndex = layout.focusedColumnIndex
+        captureOverviewThumbnails()
         isOverviewActive = true
+    }
+
+    /// Snapshots each column's focused-window terminal text for the overview tiles.
+    private func captureOverviewThumbnails() {
+        guard let bridge else { return }
+        var thumbnails: [StripColumnID: String] = [:]
+        for column in layout.columns {
+            guard let panelID = column.focusedWindow?.raw else { continue }
+            if let text = bridge.stripCaptureThumbnailText(for: panelID), !text.isEmpty {
+                thumbnails[column.id] = text
+            }
+        }
+        overviewThumbnails = thumbnails
     }
 
     /// Cancels the overview without changing the selection, restoring the exact viewport
@@ -214,6 +233,7 @@ final class WorkspaceStripController: ObservableObject {
     func cancelOverview() {
         guard isOverviewActive else { return }
         isOverviewActive = false
+        overviewThumbnails = [:]
         layout.restoreViewport(
             focusedColumnIndex: savedFocusBeforeOverview,
             scrollOffset: savedOffsetBeforeOverview
@@ -249,6 +269,7 @@ final class WorkspaceStripController: ObservableObject {
         guard isOverviewActive else { return }
         let target = overviewSelectionIndex
         isOverviewActive = false
+        overviewThumbnails = [:]
         layout.setFocusedColumn(target, viewportWidth: viewportWidth)
         if let panelID = layout.focusedColumn?.focusedWindow?.raw {
             bridge?.stripFocusPanel(panelID)
@@ -317,14 +338,20 @@ final class WorkspaceStripController: ObservableObject {
     func statusSnapshot() -> [String: Any] {
         var columns: [[String: Any]] = []
         for (index, column) in layout.columns.enumerated() {
-            columns.append([
+            var entry: [String: Any] = [
                 "id": column.id.raw.uuidString,
                 "width": Double(column.width),
                 "x": Double(layout.columnLeftEdge(index)),
                 "focused": index == layout.focusedColumnIndex,
                 "windowPanelIds": column.windows.map { $0.raw.uuidString },
                 "focusedWindowIndex": column.focusedWindowIndex,
-            ])
+            ]
+            // Render-level signal: the focused window terminal's actual grid column count.
+            if let panelID = column.focusedWindow?.raw,
+               let gridCols = bridge?.stripTerminalGridColumns(for: panelID) {
+                entry["gridCols"] = gridCols
+            }
+            columns.append(entry)
         }
         return [
             "mode": mode.rawValue,
@@ -334,6 +361,7 @@ final class WorkspaceStripController: ObservableObject {
             "focusedColumnIndex": layout.focusedColumnIndex,
             "overviewActive": isOverviewActive,
             "overviewSelectionIndex": overviewSelectionIndex,
+            "overviewThumbnailCount": overviewThumbnails.count,
             "columns": columns,
         ]
     }

@@ -189,6 +189,32 @@ final class TerminalPanel: Panel, ObservableObject {
         }
     }
 
+    /// The terminal grid's current **column count**, derived from the live rendered frame via
+    /// `ghostty_surface_size`. A full-width column reports tens of columns; a mis-sized
+    /// (sliver) host reports ~1, so this is a direct render-level signal for tests.
+    /// - Returns: The grid column count, or `nil` if the surface is gone.
+    func terminalGridColumns() -> Int? {
+        guard let ghosttySurface = surface.surface else { return nil }
+        let size = ghostty_surface_size(ghosttySurface)
+        return Int(size.columns)
+    }
+
+    /// Reads the terminal's currently visible viewport as plain text — used to render a
+    /// lightweight text thumbnail for the niri overview without capturing GPU pixels. Works for
+    /// off-screen surfaces too (it reads the cell grid, not the rendered drawable).
+    /// - Returns: The viewport text (rows separated by `\n`), or `nil` if the surface is gone.
+    func captureViewportText() -> String? {
+        guard let ghosttySurface = surface.surface else { return nil }
+        let topLeft = ghostty_point_s(tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0)
+        let bottomRight = ghostty_point_s(tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT, x: 0, y: 0)
+        let selection = ghostty_selection_s(top_left: topLeft, bottom_right: bottomRight, rectangle: false)
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_text(ghosttySurface, selection, &text) else { return nil }
+        defer { ghostty_surface_free_text(ghosttySurface, &text) }
+        guard let ptr = text.text, text.text_len > 0 else { return "" }
+        return String(decoding: Data(bytes: ptr, count: Int(text.text_len)), as: UTF8.self)
+    }
+
     func updateDirectory(_ newDirectory: String) {
         let trimmed = newDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty && directory != trimmed {

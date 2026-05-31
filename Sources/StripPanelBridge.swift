@@ -39,4 +39,14 @@ protocol StripPanelBridge: AnyObject {
     /// - Parameter panelID: The panel to close.
     @discardableResult
     func stripClosePanel(_ panelID: UUID) -> Bool
+
+    /// Captures the panel's terminal viewport as plain text, for the overview's text thumbnail.
+    /// Returns `nil` for non-terminal panels or a missing surface.
+    /// - Parameter panelID: The panel to capture.
+    func stripCaptureThumbnailText(for panelID: UUID) -> String?
+
+    /// The panel's terminal grid column count (from the live rendered frame). A render-level
+    /// signal: full-width columns report tens; a sliver reports ~1. `nil` for non-terminals.
+    /// - Parameter panelID: The panel to measure.
+    func stripTerminalGridColumns(for panelID: UUID) -> Int?
 }

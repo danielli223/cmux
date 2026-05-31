@@ -82,36 +82,59 @@ struct StripWorkspaceView: View {
         .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
-    /// A single column tile in the overview.
+    /// A single column tile in the overview: a dark "screen" showing a scaled text snapshot of
+    /// the column's focused terminal, a title bar, an optional tab indicator, and a highlight
+    /// border on the selection.
     @ViewBuilder
     private func overviewTile(column: StripColumn, index: Int, isSelected: Bool, frame: CGRect) -> some View {
         let title = overviewColumnTitle(column: column, index: index)
+        let thumbnail = stripController.overviewThumbnails[column.id]
         let accent = Color.accentColor
+        // Fixed dark "terminal screen" so the light snapshot text is always readable regardless
+        // of the live terminal theme (which previously rendered white-on-white).
         RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color(nsColor: GhosttyBackgroundTheme.currentColor()))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isSelected ? accent : Color.white.opacity(0.18),
-                                  lineWidth: isSelected ? 3 : 1)
-            )
+            .fill(Color(red: 0.07, green: 0.08, blue: 0.10))
+            .overlay(alignment: .topLeading) {
+                if let thumbnail, !thumbnail.isEmpty {
+                    Text(thumbnail)
+                        .font(.system(size: 5.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.72))
+                        .lineLimit(nil)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 20)
+                        .padding(.horizontal, 5)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .clipped()
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay(alignment: .top) {
-                VStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text(title)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 9, weight: .semibold))
                         .lineLimit(1)
-                        .foregroundStyle(.white.opacity(0.92))
+                        .foregroundStyle(.white.opacity(0.95))
                     if column.windows.count > 1 {
                         Text("\(column.focusedWindowIndex + 1)/\(column.windows.count)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 6)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(.white.opacity(0.16)))
+                            .background(Capsule().fill(accent.opacity(0.8)))
                     }
                 }
-                .padding(.top, 8)
                 .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity)
+                .background(Color.black.opacity(0.55))
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isSelected ? accent : Color.white.opacity(0.16),
+                                  lineWidth: isSelected ? 3 : 1)
+            )
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
             .contentShape(Rectangle())

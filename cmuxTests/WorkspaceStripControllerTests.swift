@@ -54,6 +54,11 @@ import Testing
             livePanels.removeAll { $0 == panelID }
             return livePanels.count != before
         }
+
+        var thumbnailText: [UUID: String] = [:]
+        func stripCaptureThumbnailText(for panelID: UUID) -> String? { thumbnailText[panelID] }
+        var gridColumns: [UUID: Int] = [:]
+        func stripTerminalGridColumns(for panelID: UUID) -> Int? { gridColumns[panelID] }
     }
 
     private func makeController(seed: [UUID]) -> (WorkspaceStripController, FakeStripBridge) {
@@ -227,6 +232,20 @@ import Testing
         #expect(controller.overviewSelectionIndex == 0)
         for _ in 0..<20 { controller.moveOverviewSelection(.right) }
         #expect(controller.overviewSelectionIndex == controller.layout.columns.count - 1)
+    }
+
+    @Test func overviewCapturesThumbnailsAndClearsOnExit() {
+        let (controller, bridge) = makeOverflowingStrip()
+        for column in controller.layout.columns {
+            if let panelID = column.focusedWindow?.raw {
+                bridge.thumbnailText[panelID] = "screen of \(panelID.uuidString.prefix(4))"
+            }
+        }
+        controller.enterOverview()
+        // One thumbnail captured per column.
+        #expect(controller.overviewThumbnails.count == controller.layout.columns.count)
+        controller.cancelOverview()
+        #expect(controller.overviewThumbnails.isEmpty) // cleared on exit
     }
 
     @Test func overviewIsInertWhenNotInStripMode() {

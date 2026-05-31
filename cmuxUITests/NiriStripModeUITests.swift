@@ -103,6 +103,53 @@ final class NiriStripModeUITests: XCTestCase {
         )
     }
 
+    /// Render-level: columns derive their width from the live content area (≈ half), and the
+    /// terminal actually renders at full width — its grid reports tens of columns, not the
+    /// 1-character sliver the SwiftUI `.position()` hosting used to produce.
+    func testColumnsRenderFullWidthAtHalfContentArea() throws {
+        let app = launchApp()
+        defer { app.terminate() }
+        XCTAssertTrue(waitForPong(timeout: 8.0))
+        XCTAssertEqual(socketCommand("niri_mode on"), "OK strip")
+        XCTAssertTrue(socketCommand("niri_open")?.hasPrefix("OK") == true) // two columns
+
+        let status = try requireStatus()
+        XCTAssertGreaterThanOrEqual(status.columns.count, 2)
+        let half = status.viewportWidth / 2
+        for (index, column) in status.columns.enumerated() {
+            XCTAssertEqual(column.width, half, accuracy: 6,
+                           "column \(index) width should be half the content area (\(half)), not a constant")
+        }
+        // The focused terminal's grid is full-width — the definitive anti-sliver render check.
+        let focused = status.columns.first(where: { $0.focused })
+        let gridCols = focused?.gridCols ?? 0
+        XCTAssertGreaterThan(gridCols, 20,
+                             "focused terminal must render at full width (grid \(gridCols) cols), not a sliver")
+    }
+
+    /// Render-level: opening the overview captures one text thumbnail per column.
+    func testOverviewCapturesOneThumbnailPerColumn() throws {
+        let app = launchApp()
+        defer { app.terminate() }
+        XCTAssertTrue(waitForPong(timeout: 8.0))
+        XCTAssertEqual(socketCommand("niri_mode on"), "OK strip")
+        XCTAssertTrue(socketCommand("niri_open")?.hasPrefix("OK") == true)
+
+        let before = try requireStatus()
+        XCTAssertEqual(socketCommand("niri_overview on"), "OK overview")
+        let overview = try requireStatus()
+        XCTAssertTrue(overview.overviewActive)
+        XCTAssertEqual(overview.overviewThumbnailCount, before.columns.count,
+                       "overview should capture one thumbnail per column")
+
+        // Selecting commits and routes focus; a keystroke after lands in the selected terminal.
+        XCTAssertEqual(socketCommand("niri_overview_move right"), "OK 1")
+        XCTAssertTrue(socketCommand("niri_overview_select")?.hasPrefix("OK") == true)
+        let after = try requireStatus()
+        XCTAssertFalse(after.overviewActive)
+        XCTAssertEqual(after.focusedColumnIndex, 1)
+    }
+
     // MARK: - Launch / socket helpers
 
     private func launchApp() -> XCUIApplication {
@@ -136,6 +183,8 @@ final class NiriStripModeUITests: XCTestCase {
     private struct StripColumnStatus {
         let width: Double
         let x: Double
+        let focused: Bool
+        let gridCols: Int?
         let windowPanelIds: [String]
     }
 
@@ -145,6 +194,8 @@ final class NiriStripModeUITests: XCTestCase {
         let scrollOffset: Double
         let totalContentWidth: Double
         let focusedColumnIndex: Int
+        let overviewActive: Bool
+        let overviewThumbnailCount: Int
         let columns: [StripColumnStatus]
     }
 
@@ -163,6 +214,8 @@ final class NiriStripModeUITests: XCTestCase {
             StripColumnStatus(
                 width: (column["width"] as? Double) ?? 0,
                 x: (column["x"] as? Double) ?? 0,
+                focused: (column["focused"] as? Bool) ?? false,
+                gridCols: column["gridCols"] as? Int,
                 windowPanelIds: (column["windowPanelIds"] as? [String]) ?? []
             )
         }
@@ -172,6 +225,8 @@ final class NiriStripModeUITests: XCTestCase {
             scrollOffset: (object["scrollOffset"] as? Double) ?? 0,
             totalContentWidth: (object["totalContentWidth"] as? Double) ?? 0,
             focusedColumnIndex: (object["focusedColumnIndex"] as? Int) ?? 0,
+            overviewActive: (object["overviewActive"] as? Bool) ?? false,
+            overviewThumbnailCount: (object["overviewThumbnailCount"] as? Int) ?? 0,
             columns: columns
         )
     }

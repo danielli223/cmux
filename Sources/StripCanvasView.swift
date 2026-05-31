@@ -4,13 +4,14 @@ import SwiftUI
 
 /// SwiftUI bridge that hosts the niri strip's terminal columns in an AppKit canvas.
 ///
-/// Each column is an `NSHostingController` added as a direct, frame-positioned subview of
-/// ``StripCanvasNSView``. This is the fix for the "1-character sliver" rendering: cmux's
-/// terminal portal sizes each Ghostty surface to its host view's frame intersected with every
-/// ancestor's bounds, and a SwiftUI `.position()` layout interposes tiny-bounds containers that
-/// clamp the surface to nothing. Hosting each column as a full-frame AppKit subview (like
-/// Bonsplit does) gives the portal the real column rectangle.
-struct StripCanvasView: NSViewRepresentable {
+/// Each column is an `NSHostingController` added as a **child view controller** and a
+/// frame-positioned subview of ``StripCanvasNSView``. This is the fix for the "1-character
+/// sliver" rendering: cmux's terminal portal sizes each Ghostty surface to its host view's
+/// frame intersected with every ancestor's bounds, and a SwiftUI `.position()` layout
+/// interposes tiny-bounds containers that clamp the surface to nothing. Hosting each column as
+/// a full-frame AppKit subview (as Bonsplit does, via a child hosting controller) gives the
+/// portal the real column rectangle.
+struct StripCanvasView: NSViewControllerRepresentable {
     @ObservedObject var workspace: Workspace
     @ObservedObject var stripController: WorkspaceStripController
     let isWorkspaceVisible: Bool
@@ -18,19 +19,16 @@ struct StripCanvasView: NSViewRepresentable {
     let workspacePortalPriority: Int
     let appearance: PanelAppearance
 
-    func makeNSView(context: Context) -> StripCanvasNSView {
-        StripCanvasNSView()
+    func makeNSViewController(context: Context) -> StripCanvasViewController {
+        StripCanvasViewController()
     }
 
-    func updateNSView(_ canvas: StripCanvasNSView, context: Context) {
-        canvas.sync(
+    func updateNSViewController(_ controller: StripCanvasViewController, context: Context) {
+        controller.sync(
             layout: stripController.layout,
             isOverviewActive: stripController.isOverviewActive,
-            contentKey: { column in
-                // Rebuild a column's hosted SwiftUI only when its visible (focused) window or
-                // tab count changes — not on every scroll — to avoid remounting the portal.
-                "\(column.focusedWindow?.raw.uuidString ?? "none")|\(column.windows.count)|\(isWorkspaceInputActive)|\(isWorkspaceVisible)"
-            },
+            isWorkspaceInputActive: isWorkspaceInputActive,
+            isWorkspaceVisible: isWorkspaceVisible,
             buildContent: { column, isColumnFocused in
                 AnyView(self.columnContent(column: column, isColumnFocused: isColumnFocused))
             }
@@ -51,7 +49,10 @@ struct StripCanvasView: NSViewRepresentable {
                     paneId: paneId,
                     isFocused: isWorkspaceInputActive && isColumnFocused,
                     isSelectedInPane: true,
-                    isVisibleInUI: isWorkspaceVisible,
+                    // Hide the live terminal portals while the overview is up (the portal is a
+                    // window-level layer above SwiftUI, so it would otherwise show through the
+                    // dimmed overview). Terminals keep running; only rendering is gated.
+                    isVisibleInUI: isWorkspaceVisible && !stripController.isOverviewActive,
                     portalPriority: workspacePortalPriority,
                     isSplit: stripController.layout.columns.count > 1,
                     appearance: appearance,
@@ -101,21 +102,22 @@ private struct StripTabIndicator: View {
             }
             Text("\(active + 1)/\(count)")
                 .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(.white.opacity(0.85))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(.black.opacity(0.55)))
+        .background(Capsule().fill(.black.opacity(0.6)))
         .allowsHitTesting(false)
     }
 }
 
-/// The AppKit canvas that positions one `NSHostingController` per strip column by frame.
+/// View controller that positions one child `NSHostingController` per strip column by frame.
 ///
-/// Flipped (top-left origin) so the rectangles from ``StripLayout/columnFrames(in:)`` map
-/// directly. Reuses a controller per column id across syncs so panning only moves frames and
-/// never remounts the terminal portal.
-final class StripCanvasNSView: NSView {
+/// Using a view controller (not a bare view) gives each column hosting controller a proper
+/// parent via `addChild`, so the responder chain, focus, and SwiftUI lifecycle behave like
+/// Bonsplit's panes. Columns are reused per column id across syncs, so panning only moves
+/// frames and never remounts the terminal portal.
+final class StripCanvasViewController: NSViewController {
     private struct Hosted {
         let controller: NSHostingController<AnyView>
         var contentKey: String
@@ -123,31 +125,28 @@ final class StripCanvasNSView: NSView {
 
     private var hosts: [StripColumnID: Hosted] = [:]
 
-    override var isFlipped: Bool { true }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.masksToBounds = true
+    override func loadView() {
+        let canvas = StripCanvasNSView()
+        canvas.wantsLayer = true
+        canvas.layer?.masksToBounds = true
+        view = canvas
     }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// Reconciles the hosted column views with the current ``StripLayout``.
     /// - Parameters:
     ///   - layout: The current strip model.
     ///   - isOverviewActive: When true, hide the live terminals (the overview tiles cover them).
-    ///   - contentKey: Identity of a column's *content* — its hosted SwiftUI is rebuilt only when
-    ///     this changes, so scrolling (frame-only changes) never remounts the portal.
-    ///   - buildContent: Builds a column's SwiftUI content; the `Bool` is whether it's focused.
+    ///   - isWorkspaceInputActive: Whether this workspace has keyboard focus.
+    ///   - isWorkspaceVisible: Whether this workspace is visible.
+    ///   - buildContent: Builds a column's SwiftUI content; the `Bool` is whether it is focused.
     func sync(
         layout: StripLayout,
         isOverviewActive: Bool,
-        contentKey: (StripColumn) -> String,
+        isWorkspaceInputActive: Bool,
+        isWorkspaceVisible: Bool,
         buildContent: (StripColumn, Bool) -> AnyView
     ) {
-        let viewport = CGRect(origin: .zero, size: bounds.size)
+        let viewport = CGRect(origin: .zero, size: view.bounds.size)
         let frames = layout.columnFrames(in: viewport)
         var live: Set<StripColumnID> = []
 
@@ -155,7 +154,17 @@ final class StripCanvasNSView: NSView {
             guard frames.indices.contains(index) else { continue }
             let frame = frames[index].frame
             let isFocused = index == layout.focusedColumnIndex
-            let key = contentKey(column)
+            // Rebuild the hosted SwiftUI only when content identity changes — NOT on scroll
+            // (which changes only the frame). Focus / input-active / visibility are included so
+            // the focus ring and portal visibility stay correct; none of them change on scroll.
+            let key = [
+                column.focusedWindow?.raw.uuidString ?? "none",
+                String(column.windows.count),
+                isFocused ? "f" : "-",
+                isWorkspaceInputActive ? "a" : "-",
+                isWorkspaceVisible ? "v" : "-",
+                isOverviewActive ? "o" : "-", // toggling overview flips isVisibleInUI -> rebuild
+            ].joined(separator: "|")
             live.insert(column.id)
 
             if var existing = hosts[column.id] {
@@ -168,9 +177,10 @@ final class StripCanvasNSView: NSView {
                 existing.controller.view.isHidden = isOverviewActive
             } else {
                 let controller = NSHostingController(rootView: buildContent(column, isFocused))
+                addChild(controller) // AppKit handles the parent/child lifecycle (no did/willMove)
+                view.addSubview(controller.view)
                 controller.view.frame = frame
                 controller.view.isHidden = isOverviewActive
-                addSubview(controller.view)
                 hosts[column.id] = Hosted(controller: controller, contentKey: key)
             }
         }
@@ -178,7 +188,14 @@ final class StripCanvasNSView: NSView {
         // Remove hosts for columns that no longer exist.
         for (id, hosted) in hosts where !live.contains(id) {
             hosted.controller.view.removeFromSuperview()
+            hosted.controller.removeFromParent()
             hosts.removeValue(forKey: id)
         }
     }
+}
+
+/// The flipped AppKit canvas (top-left origin) so the rectangles from
+/// ``StripLayout/columnFrames(in:)`` map directly to subview frames.
+final class StripCanvasNSView: NSView {
+    override var isFlipped: Bool { true }
 }

@@ -40,6 +40,7 @@ in any mode; the rest act only while the strip is active.
 | ⌃⌥← / ⌃⌥→ | Focus column left / right (pans to edge) | `shortcut.niriFocusColumnLeft` / `Right` |
 | ⌃⌥↑ / ⌃⌥↓ | Focus window up / down within column | `shortcut.niriFocusWindowUp` / `Down` |
 | ⌃⌥⇧← / ⌃⌥⇧→ | Move column left / right on the strip | `shortcut.niriMoveColumnLeft` / `Right` |
+| ⌃⌥V (hold) | Hold-to-preview overview (zoom out) | `shortcut.niriToggleOverview` |
 
 These do not collide with the reserved bindings (⌘D, ⌘⇧D, ⌃Tab, ⌘⇧[ / ⌘⇧], ⌥⌘+arrows).
 
@@ -68,22 +69,24 @@ content width ÷ total strip width, capped at 1) so every column is visible at o
 laid out at its real relative position. The sidebar is untouched — the overview only fills the
 content area to its right (frames live in content-area coordinates, same origin as normal mode).
 
-- **Navigate:** `⌃⌥←/→` (or plain arrow keys) move a highlight between columns.
-- **Select:** `Return` or a click sets that column as focused, closes the overview, and pans the
-  viewport to bring it on-screen (reusing the leading-edge focus pan).
-- **Cancel:** `Escape`, `⌃⌥V`, or clicking the dimmed backdrop closes the overview and restores
-  the exact prior viewport (focused column + scroll offset).
-- The scale transition is animated (spring). Its smoothness is a manual/human-review item.
+**Hold-to-preview (⌘-Tab style):** `⌃⌥V` is *held*, not tapped. The keyDown opens the overview;
+while held, `⌃⌥←/→` (or plain arrow keys) move the highlight; **releasing** the key — or
+releasing Control/Option — commits: it focuses the highlighted column, closes the overview, pans
+the viewport to bring it on-screen, and routes keyboard input to that terminal (a keystroke right
+after release lands in it). `Return` commits early; `Escape` (or clicking the dimmed backdrop)
+cancels and restores the exact prior viewport (focused column + scroll offset). A transient
+`NSEvent` monitor (installed on hold-start, removed on commit/cancel) drives the release
+detection. The scale transition is animated (spring); its smoothness is a manual-review item.
 
-**Live miniatures vs. snapshots — decision:** v1 renders lightweight **tiles** (column
-background + title + a `n/total` tab indicator for stacked columns), *not* live or snapshot
-terminal pixels. Rationale: cmux terminals are GPU-portal windows that render above SwiftUI and
-**reflow** when their host frame shrinks (the same mechanism behind the leftmost-sliver bug), so
-scaling a live portal does not visually shrink it; and capturing a per-terminal snapshot of GPU
-content is expensive. Tiles deliver the zoom-out navigation cheaply and reliably. While the
-overview is open the live terminal portals are gated off (`isVisibleInUI = false`) so the tiles
-aren't covered — the terminal processes keep running. Live or snapshot miniatures are a
-documented future enhancement.
+**Thumbnails — decision:** each tile renders a **text snapshot** of the column's focused terminal
+(its viewport captured via `ghostty_surface_read_text` when the overview opens), drawn as scaled
+monospace text on a dark tile. Rationale: cmux terminals are GPU-portal windows that render above
+SwiftUI and **reflow** when their host frame shrinks (the mechanism behind the sliver bug), so a
+live scaled portal doesn't visually shrink; and Ghostty exposes no per-cell colour API, so a true
+pixel snapshot can't be reconstructed for off-screen columns. Reading the cell-text grid works for
+**all** columns (on- and off-screen), is cheap, and is arguably more useful for terminals — you
+can read what's there. While the overview is open the live portals are gated off
+(`isVisibleInUI = false`) so the tiles aren't covered; the terminal processes keep running.
 
 ## Control socket (v1)
 

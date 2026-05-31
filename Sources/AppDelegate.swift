@@ -714,6 +714,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var windowKeyObservers: [NSObjectProtocol] = []
     private var shortcutMonitor: Any?
     private var shortcutDefaultsObserver: NSObjectProtocol?
+    /// Transient local NSEvent monitor active only while the niri overview keybind is held
+    /// (hold-to-preview). Removed when the key/modifiers are released (commit) or on cancel.
+    private var niriOverviewHoldMonitor: Any?
     private var menuBarVisibilityObserver: NSObjectProtocol?
     private var splitButtonTooltipRefreshScheduled = false
     private var didScheduleGhosttyCrashBreadcrumbCheck = false
@@ -12724,9 +12727,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
         if let stripController = tabManager?.selectedTab?.stripController, stripController.isStripMode {
-            // Overview toggle works whether or not the overview is currently up.
+            // Hold-to-preview (⌘-Tab style): the keybind keyDown opens the overview and starts a
+            // hold; a transient monitor commits on release. Ignore key repeats while held.
             if matchConfiguredShortcut(event: event, action: .niriToggleOverview) {
-                stripController.toggleOverview(); return true
+                if !event.isARepeat {
+                    beginNiriOverviewHold(stripController: stripController)
+                }
+                return true
             }
             if stripController.isOverviewActive {
                 // Overview navigation: arrow keys (plain or the ^⌥ layer) move the highlight,
@@ -13573,6 +13580,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 #endif
+    }
+
+    // MARK: - niri overview hold-to-preview
+
+    /// Opens the niri overview and installs a transient monitor so it behaves like ⌘-Tab:
+    /// while ⌃⌥V is held, arrows move the highlight; releasing the key or a modifier commits
+    /// (focuses the highlighted column) and dismisses the overview.
+    private func beginNiriOverviewHold(stripController: WorkspaceStripController) {
+        guard !stripController.isOverviewActive else { return }
+        stripController.enterOverview()
+        removeNiriOverviewHoldMonitor()
+        niriOverviewHoldMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .keyUp, .flagsChanged]
+        ) { [weak self, weak stripController] event in
+            guard let self, let stripController, stripController.isOverviewActive else {
+                self?.removeNiriOverviewHoldMonitor()
+                return event
+            }
+            switch event.type {
+            case .keyUp:
+                if event.keyCode == 9 { // V released -> commit
+                    self.commitNiriOverviewHold(stripController)
+                    return nil
+                }
+            case .flagsChanged:
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if !flags.contains(.control) || !flags.contains(.option) {
+                    self.commitNiriOverviewHold(stripController)
+                    return nil
+                }
+            case .keyDown:
+                switch event.keyCode {
+                case 123: stripController.moveOverviewSelection(.left); return nil
+                case 124: stripController.moveOverviewSelection(.right); return nil
+                case 125, 126: return nil // swallow up/down
+                case 36, 76: self.commitNiriOverviewHold(stripController); return nil // Return
+                case 53: self.cancelNiriOverviewHold(stripController); return nil // Escape
+                case 9: return nil // V key repeats while held
+                default: break
+                }
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private func commitNiriOverviewHold(_ stripController: WorkspaceStripController) {
+        removeNiriOverviewHoldMonitor()
+        stripController.selectOverviewColumn()
+    }
+
+    private func cancelNiriOverviewHold(_ stripController: WorkspaceStripController) {
+        removeNiriOverviewHoldMonitor()
+        stripController.cancelOverview()
+    }
+
+    private func removeNiriOverviewHoldMonitor() {
+        if let monitor = niriOverviewHoldMonitor {
+            NSEvent.removeMonitor(monitor)
+            niriOverviewHoldMonitor = nil
+        }
     }
 
     private func handleBrowserOmnibarSelectionRepeatLifecycleEvent(_ event: NSEvent) {

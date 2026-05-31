@@ -38,6 +38,14 @@ extension Workspace: StripPanelBridge {
         closePanel(panelID)
     }
 
+    func stripCaptureThumbnailText(for panelID: UUID) -> String? {
+        (panels[panelID] as? TerminalPanel)?.captureViewportText()
+    }
+
+    func stripTerminalGridColumns(for panelID: UUID) -> Int? {
+        (panels[panelID] as? TerminalPanel)?.terminalGridColumns()
+    }
+
     /// The Bonsplit pane currently hosting the given panel, if any. Used by the strip renderer
     /// to satisfy ``PanelContentView``'s `paneId` requirement (panels stay Bonsplit-backed even
     /// in niri-mode).
