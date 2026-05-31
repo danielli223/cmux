@@ -123,6 +123,31 @@ import Testing
         #expect(strip.scrollOffset == 0)
     }
 
+    /// The regression for the reported bug: with columns 2 and 3 both on screen (column 2 left,
+    /// column 3 right) and focus on column 3, pressing focus-left must NOT shift the whole strip —
+    /// columns 2 and 3 stay displayed and focus simply moves to the already-visible column 2.
+    @Test func focusColumnLeftDoesNotPanWhenTargetAlreadyVisible() {
+        var strip = threeColumns()
+        strip.focusColumn(.right, viewportWidth: 1200)
+        strip.focusColumn(.right, viewportWidth: 1200) // offset 600, focus index 2 (cols 1|2 shown)
+        #expect(strip.scrollOffset == 600)
+
+        strip.focusColumn(.left, viewportWidth: 1200)  // back to index 1, which is already visible
+        // Column 1 is fully visible at offset 600 (the left of the visible pair), so no pan:
+        // the same two columns stay on screen, focus just moves left.
+        #expect(strip.focusedColumnIndex == 1)
+        #expect(strip.scrollOffset == 600)
+        // Both columns 1 and 2 remain visible after the focus change.
+        let frames = strip.columnFrames(in: CGRect(x: 0, y: 0, width: 1200, height: 1000))
+        #expect(frames[1].isVisible == true)
+        #expect(frames[2].isVisible == true)
+
+        // Pressing left again DOES pan, because column 0 is off-screen to the left.
+        strip.focusColumn(.left, viewportWidth: 1200) // focus index 0
+        #expect(strip.focusedColumnIndex == 0)
+        #expect(strip.scrollOffset == 0) // column 0 snapped to the leading edge
+    }
+
     /// Every focus-column press advances focus by exactly one and slides the 2-column window;
     /// the offset increases monotonically across the strip (no "dead" presses that do nothing
     /// then jump). The very first pair shares offset 0 (both already visible), as expected.
