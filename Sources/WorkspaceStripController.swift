@@ -53,7 +53,7 @@ final class WorkspaceStripController: ObservableObject {
     func enableStripMode() {
         guard mode != .strip else { return }
         let seedIDs = bridge?.stripSeedPanelIDs ?? []
-        var columns: [StripColumn] = seedIDs.map { panelID in
+        let columns: [StripColumn] = seedIDs.map { panelID in
             StripColumn(
                 id: StripColumnID(UUID()),
                 width: newColumnWidth,
@@ -71,7 +71,6 @@ final class WorkspaceStripController: ObservableObject {
             layout = StripLayout(columns: columns, focusedColumnIndex: focusedIndex, gap: layout.gap)
             layout.revealFocusedColumnForViewport(viewportWidth)
         }
-        columns.removeAll()
         mode = .strip
     }
 

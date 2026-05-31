@@ -146,12 +146,6 @@ final class StripScrollCatcherView: NSView {
 
     override var acceptsFirstResponder: Bool { false }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        // Stay out of the hit path for clicks/keys so terminals keep first responder; only
-        // scrollWheel is delivered (AppKit routes scroll to the view under the cursor).
-        return nil
-    }
-
     override func scrollWheel(with event: NSEvent) {
         guard let stripController, stripController.isStripMode else {
             super.scrollWheel(with: event)
