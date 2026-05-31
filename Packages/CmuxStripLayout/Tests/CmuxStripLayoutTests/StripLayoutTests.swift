@@ -476,7 +476,7 @@ import Testing
         #expect(strip.columns.indices.contains(strip.focusedColumnIndex))
     }
 
-    // MARK: - Continuous pan + snap (open question d)
+    // MARK: - Scroll offset clamping
 
     @Test func setScrollOffsetClampsToRange() {
         var strip = threeColumns(viewportWidth: 800)
@@ -484,17 +484,6 @@ import Testing
         #expect(strip.scrollOffset == 1000) // clamped to max
         strip.setScrollOffset(-50, viewportWidth: 800)
         #expect(strip.scrollOffset == 0) // clamped to min
-    }
-
-    @Test func snapScrollGoesToNearestColumnEdge() {
-        var strip = threeColumns(viewportWidth: 800)
-        strip.setScrollOffset(560, viewportWidth: 800) // nearest column edge is 600 (col 1)
-        strip.snapScrollToNearestColumn(viewportWidth: 800)
-        #expect(strip.scrollOffset == 600)
-
-        strip.setScrollOffset(100, viewportWidth: 800) // nearest edge is 0 (col 0)
-        strip.snapScrollToNearestColumn(viewportWidth: 800)
-        #expect(strip.scrollOffset == 0)
     }
 
     @Test func setColumnWidthIsTheOnlyResizePath() {

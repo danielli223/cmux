@@ -70,9 +70,6 @@ policies share the model:
   edge, snapped to a boundary — the new column appears with its left-neighbours for context and
   minimal trailing blank.
 
-A horizontal two-finger trackpad scroll pans continuously (pixel-for-pixel) and snaps to the
-nearest column boundary on release. Vertical scroll falls through to the focused terminal.
-
 ## Overview (zoom-out)
 
 `⌃⌥V` toggles a niri-style **overview**: the whole strip is scaled down (`overviewScale` =
@@ -133,8 +130,6 @@ selected workspace.
 - **(c) Socket-exposed.** A read-only `niri_status` query plus the structural commands above let
   automation/tests assert the invariants. All mutation flows through the one shared
   `WorkspaceStripController` path (keybind, socket, future menu) per the shared-behavior policy.
-- **(d) Both scroll modes.** Continuous pixel-pan for trackpad (snap-to-column on release) and
-  discrete focus changes for keyboard — matching niri.
 
 ## Session restore
 

@@ -392,32 +392,13 @@ public struct StripLayout: Equatable, Sendable, Codable {
         }
     }
 
-    /// Directly sets the scroll offset (e.g. from a continuous trackpad pan), clamped to the
-    /// valid range for `viewportWidth`. Does not change focus.
+    /// Directly sets the scroll offset, clamped to the valid range for `viewportWidth`. Does not
+    /// change focus. Used to re-clamp the offset when the viewport or content width changes.
     /// - Parameters:
     ///   - offset: The desired offset in strip coordinates.
     ///   - viewportWidth: Current viewport width.
     public mutating func setScrollOffset(_ offset: CGFloat, viewportWidth: CGFloat) {
         scrollOffset = offset
-        clampScroll(viewportWidth: viewportWidth)
-    }
-
-    /// Snaps the scroll offset to the column whose left edge is nearest the current offset —
-    /// the niri "snap-to-column on release" behavior after a continuous trackpad pan.
-    /// - Parameter viewportWidth: Current viewport width, used to clamp the result.
-    public mutating func snapScrollToNearestColumn(viewportWidth: CGFloat) {
-        guard !columns.isEmpty else { scrollOffset = 0; return }
-        var best = scrollOffset
-        var bestDistance = CGFloat.greatestFiniteMagnitude
-        for index in columns.indices {
-            let edge = columnLeftEdge(index)
-            let distance = abs(edge - scrollOffset)
-            if distance < bestDistance {
-                bestDistance = distance
-                best = edge
-            }
-        }
-        scrollOffset = best
         clampScroll(viewportWidth: viewportWidth)
     }
 

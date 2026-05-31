@@ -58,7 +58,6 @@ struct StripWorkspaceView: View {
             .onChange(of: geo.size.width) { _, newWidth in
                 stripController.setViewportWidth(newWidth)
             }
-            .background(StripScrollCatcher(stripController: stripController))
         }
     }
 
@@ -192,8 +191,6 @@ struct StripWorkspaceView: View {
     }
 }
 
-/// An AppKit-backed transparent overlay that turns continuous two-finger trackpad scrolling
-/// into strip panning (with snap-to-column on gesture end), matching niri's touchpad gesture.
 /// A small persistent badge shown in the content area's top-right corner while niri-mode is on,
 /// so the mode is unambiguous (there is no other visible cue when a single terminal is open).
 private struct StripModeIndicator: View {
@@ -216,43 +213,5 @@ private struct StripModeIndicator: View {
         .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
         .allowsHitTesting(false)
         .accessibilityLabel(Text("niri strip mode active"))
-    }
-}
-
-private struct StripScrollCatcher: NSViewRepresentable {
-    let stripController: WorkspaceStripController
-
-    func makeNSView(context: Context) -> StripScrollCatcherView {
-        let view = StripScrollCatcherView()
-        view.stripController = stripController
-        return view
-    }
-
-    func updateNSView(_ nsView: StripScrollCatcherView, context: Context) {
-        nsView.stripController = stripController
-    }
-}
-
-/// The `NSView` that receives `scrollWheel:` events for ``StripScrollCatcher``.
-final class StripScrollCatcherView: NSView {
-    weak var stripController: WorkspaceStripController?
-
-    override var acceptsFirstResponder: Bool { false }
-
-    override func scrollWheel(with event: NSEvent) {
-        guard let stripController, stripController.isStripMode, !stripController.isOverviewActive else {
-            super.scrollWheel(with: event)
-            return
-        }
-        let dx = event.scrollingDeltaX
-        let dy = event.scrollingDeltaY
-        guard abs(dx) > abs(dy) else {
-            super.scrollWheel(with: event)
-            return
-        }
-        stripController.panBy(-dx)
-        if event.phase == .ended || event.momentumPhase == .ended {
-            stripController.snapScroll()
-        }
     }
 }

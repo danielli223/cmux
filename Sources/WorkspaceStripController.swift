@@ -312,22 +312,6 @@ final class WorkspaceStripController: ObservableObject {
         }
     }
 
-    // MARK: - Scrolling (trackpad)
-
-    /// Pans the strip by a pixel delta (continuous two-finger trackpad pan). Does not change
-    /// focus. Positive `dx` reveals columns to the right.
-    /// - Parameter dx: Pixels to pan by.
-    func panBy(_ dx: CGFloat) {
-        guard mode == .strip else { return }
-        layout.setScrollOffset(layout.scrollOffset + dx, viewportWidth: viewportWidth)
-    }
-
-    /// Snaps the scroll offset to the nearest column edge (on trackpad gesture release).
-    func snapScroll() {
-        guard mode == .strip else { return }
-        layout.snapScrollToNearestColumn(viewportWidth: viewportWidth)
-    }
-
     // MARK: - External panel events
 
     /// Reconciles the strip when a panel disappears out-of-band (closed via another surface,
