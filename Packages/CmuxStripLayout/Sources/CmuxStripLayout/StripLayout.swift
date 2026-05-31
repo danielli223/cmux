@@ -354,9 +354,9 @@ public struct StripLayout: Equatable, Sendable, Codable {
         clampScroll(viewportWidth: viewportWidth)
     }
 
-    /// Sets the focused column by index and pans it into view (the leading-edge pan, so the
-    /// selected column lands at the content origin). Used when selecting a column from the
-    /// overview. The index is clamped into range.
+    /// Sets the focused column by index and pans it just into view (no pan if it is already fully
+    /// visible; otherwise the minimum column-snapped scroll — see ``revealFocusedColumn``). Used
+    /// when selecting a column from the overview. The index is clamped into range.
     /// - Parameters:
     ///   - index: The column to focus.
     ///   - viewportWidth: Current viewport width, used to pan.
@@ -423,23 +423,63 @@ public struct StripLayout: Equatable, Sendable, Codable {
 
     // MARK: - Internal scroll helpers
 
-    /// Pans so the **focused column sits in the right slot**, with its immediate predecessor in
-    /// the left slot.
+    /// Pans the viewport the **minimum** amount needed to make the focused column fully visible,
+    /// and not at all when it already is.
     ///
-    /// With columns sized to half the content area, this means two columns fill the screen and a
-    /// newly focused or opened column slides in from the right while the previous one slides to
-    /// the left (older columns scroll off). The offset is always a column boundary
-    /// (`columnLeftEdge(focused − 1)`), so the leftmost visible column starts exactly at the
-    /// content origin — never a reflowed sliver — and each focus change pans by exactly one
-    /// column. The single (or first) column has no predecessor and sits at the left edge.
+    /// This is niri's `center-focused-column "never"` scrolling: a focus change scrolls only when
+    /// the target is off-screen (or clipped). If the focused column is already fully within the
+    /// viewport — e.g. it is the column next to the one you just left, with both on screen — the
+    /// offset does not move; focus simply shifts within the visible pair. Re-anchoring on every
+    /// focus change (the old "always put it in the right slot" behavior) wrongly shifted the whole
+    /// strip even when the target was already visible.
+    ///
+    /// When a pan *is* needed the offset is always set to a **column boundary**
+    /// (``columnLeftEdge(_:)``), so the leftmost visible column starts exactly at the content
+    /// origin and is never reflowed into a sliver:
+    /// - Off (or clipped) on the **left** → the focused column snaps to the leading edge.
+    /// - Off (or clipped) on the **right** → the smallest boundary that brings the focused column
+    ///   fully into view at the trailing edge (its predecessor stays on the left for context). For
+    ///   half-width columns this is `columnLeftEdge(focused − 1)` — the "slide in from the right"
+    ///   used when opening a new column.
     private mutating func revealFocusedColumn(viewportWidth: CGFloat) {
         guard columns.indices.contains(focusedColumnIndex) else { return }
         guard totalContentWidth > viewportWidth else {
             scrollOffset = 0
             return
         }
-        let predecessor = max(0, focusedColumnIndex - 1)
-        scrollOffset = max(0, columnLeftEdge(predecessor))
+        let epsilon: CGFloat = 0.5
+        let focusedLeft = columnLeftEdge(focusedColumnIndex)
+        let focusedRight = focusedLeft + columns[focusedColumnIndex].width
+        let viewportRight = scrollOffset + viewportWidth
+
+        if focusedLeft < scrollOffset - epsilon {
+            // Off (or clipped) on the left: snap the focused column to the leading edge.
+            scrollOffset = focusedLeft
+        } else if focusedRight > viewportRight + epsilon {
+            // Off (or clipped) on the right: pan the minimum column-snapped amount so the focused
+            // column is fully visible at the trailing edge. We deliberately do NOT clamp this down
+            // to `maxScrollOffset(for:)`: with inter-column gaps that maximum is usually not a
+            // column boundary, so clamping there would reflow the leftmost column into a sliver.
+            // Landing on the boundary instead can leave a small trailing blank when the focused
+            // column is the last one — that is the intended "minimal trailing blank" trade-off.
+            scrollOffset = smallestColumnBoundary(atLeast: focusedRight - viewportWidth)
+        }
+        // else: the focused column is already fully visible — leave the offset untouched. Every
+        // branch keeps `scrollOffset` on a non-negative column boundary, so no extra clamp is run.
+    }
+
+    /// The smallest column left-edge boundary `>= target` (clamped to `>= 0`), used to keep the
+    /// scroll offset on a column boundary when revealing an off-screen-right column.
+    /// - Parameter target: The minimum offset, in strip coordinates.
+    /// - Returns: A ``columnLeftEdge(_:)`` value, or the last column's left edge if none reaches
+    ///   `target`.
+    private func smallestColumnBoundary(atLeast target: CGFloat) -> CGFloat {
+        guard target > 0 else { return 0 }
+        for index in columns.indices {
+            let edge = columnLeftEdge(index)
+            if edge >= target - 0.001 { return edge }
+        }
+        return columnLeftEdge(max(0, columns.count - 1))
     }
 
     /// Clamps ``scrollOffset`` into `0...maxScrollOffset(for:)`.
