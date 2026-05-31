@@ -250,7 +250,12 @@ extension Workspace {
             logEntries: logSnapshots,
             progress: progressSnapshot,
             gitBranch: gitBranchSnapshot,
-            remote: remoteConfiguration?.sessionSnapshot()
+            remote: remoteConfiguration?.sessionSnapshot(),
+            layoutMode: stripController.mode == .strip ? WorkspaceLayoutMode.strip.rawValue : nil,
+            stripColumns: stripController.sessionColumnPanelIDs(),
+            stripFocusedColumnIndex: stripController.mode == .strip
+                ? stripController.layout.focusedColumnIndex
+                : nil
         )
     }
 
@@ -357,6 +362,24 @@ extension Workspace {
         }
         AppDelegate.shared?.notificationStore?.restoreSessionNotifications(restoredNotifications, forTabId: id)
         syncUnreadBadgeStateForAllPanels()
+
+        // Restore niri-mode strip, remapping persisted panel ids to the live ones.
+        if snapshot.layoutMode == WorkspaceLayoutMode.strip.rawValue,
+           let persistedColumns = snapshot.stripColumns {
+            let remappedColumns: [[UUID]] = persistedColumns.map { panelIDs in
+                panelIDs.compactMap { oldToNewPanelIds[$0] }
+            }.filter { !$0.isEmpty }
+            if !remappedColumns.isEmpty {
+                let focusIndex = min(
+                    max(snapshot.stripFocusedColumnIndex ?? 0, 0),
+                    remappedColumns.count - 1
+                )
+                stripController.restoreFromSession(
+                    columnPanelIDs: remappedColumns,
+                    focusedColumnIndex: focusIndex
+                )
+            }
+        }
         return oldToNewPanelIds
     }
 
@@ -9439,6 +9462,15 @@ final class Workspace: Identifiable, ObservableObject {
 
     /// The bonsplit controller managing the split panes for this workspace
     let bonsplitController: BonsplitController
+
+    /// Per-workspace niri-style scrollable-strip controller. Dormant (mode `.tiling`) by
+    /// default, so this property has zero effect on tiling behavior until niri-mode is
+    /// enabled. Created lazily and wired to `self` as its `StripPanelBridge`.
+    lazy var stripController: WorkspaceStripController = {
+        let controller = WorkspaceStripController()
+        controller.bridge = self
+        return controller
+    }()
     private struct SurfaceTabBarExecutableButton {
         let button: CmuxSurfaceTabBarButton
         let builtInAction: CmuxSurfaceTabBarBuiltInAction?

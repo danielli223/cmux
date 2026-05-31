@@ -12,11 +12,11 @@ import Testing
 
     /// Deterministic id factory so failures are reproducible (no `UUID()` in assertions).
     private func columnID(_ n: Int) -> StripColumnID {
-        StripColumnID(UUID(uuidString: "00000000-0000-0000-0000-0000000000\(String(format: "%02d", n))")!)
+        StripColumnID(UUID(uuidString: "00000000-0000-0000-0000-\(String(format: "%012d", n))")!)
     }
 
     private func windowID(_ n: Int) -> StripWindowID {
-        StripWindowID(UUID(uuidString: "11111111-0000-0000-0000-0000000000\(String(format: "%02d", n))")!)
+        StripWindowID(UUID(uuidString: "11111111-0000-0000-0000-\(String(format: "%012d", n))")!)
     }
 
     private func column(_ n: Int, width: CGFloat = 600, windows: Int = 1) -> StripColumn {
@@ -310,6 +310,47 @@ import Testing
         // Enforces a sane minimum.
         strip.setColumnWidth(5, at: 1, viewportWidth: 800)
         #expect(strip.columns[1].width == 80)
+    }
+
+    // MARK: - removeWindow / replaceFocusedColumn (stacked window close)
+
+    @Test func removeWindowFromStackKeepsColumn() {
+        var strip = StripLayout(
+            columns: [column(1, width: 500, windows: 3), column(2, width: 300)],
+            focusedColumnIndex: 0
+        )
+        let w = windowID(10 * 1 + 1) // second window of column 1
+        #expect(strip.removeWindow(w, viewportWidth: 800) == true)
+        #expect(strip.columns.count == 2) // column survives
+        #expect(strip.columns[0].windows.count == 2)
+        #expect(strip.columns.map(\.width) == [500, 300]) // no resize
+    }
+
+    @Test func removeLastWindowRemovesColumn() {
+        var strip = StripLayout(
+            columns: [column(1, width: 500, windows: 1), column(2, width: 300)],
+            focusedColumnIndex: 0
+        )
+        let only = windowID(10) // sole window of column 1
+        #expect(strip.removeWindow(only, viewportWidth: 800) == true)
+        #expect(strip.columns.count == 1)
+        #expect(strip.columns[0].id == columnID(2))
+        #expect(strip.columns[0].width == 300)
+    }
+
+    @Test func removeUnknownWindowIsNoOp() {
+        var strip = threeColumns()
+        #expect(strip.removeWindow(windowID(999), viewportWidth: 800) == false)
+        #expect(strip.columns.count == 3)
+    }
+
+    @Test func replaceFocusedColumnEditsInPlace() {
+        var strip = StripLayout(columns: [column(1, width: 500), column(2, width: 300)], focusedColumnIndex: 1)
+        var edited = strip.columns[1]
+        edited.windows.append(windowID(88))
+        strip.replaceFocusedColumn(with: edited)
+        #expect(strip.columns[1].windows.count == 2)
+        #expect(strip.columns[0].width == 500) // sibling untouched
     }
 
     // MARK: - Invariant 7 support: Codable round-trip (session restore)

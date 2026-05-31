@@ -12716,6 +12716,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
         if matchConfiguredShortcut(event: event, action: .equalizeSplits) { performEqualizeSplitsShortcut(); return true }
+
+        // niri-mode (scrollable strip) shortcuts. Toggle works in any mode; the rest only
+        // act while the strip is active so they don't shadow other bindings in tiling mode.
+        if matchConfiguredShortcut(event: event, action: .niriToggleMode) {
+            tabManager?.selectedTab?.stripController.toggleStripMode()
+            return true
+        }
+        if let stripController = tabManager?.selectedTab?.stripController, stripController.isStripMode {
+            if matchConfiguredShortcut(event: event, action: .niriNewColumn) {
+                stripController.openColumn(); return true
+            }
+            if matchConfiguredShortcut(event: event, action: .niriNewStackedWindow) {
+                stripController.openStackedWindow(); return true
+            }
+            if matchConfiguredShortcut(event: event, action: .niriCloseColumn) {
+                stripController.closeFocusedColumn(); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                stripController.moveColumn(.left); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                stripController.moveColumn(.right); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                stripController.focusColumn(.left); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                stripController.focusColumn(.right); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126) {
+                stripController.focusWindow(.up); return true
+            }
+            if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
+                stripController.focusWindow(.down); return true
+            }
+        }
         // Configured split actions.
         if matchConfiguredShortcut(event: event, action: .splitRight) {
 #if DEBUG

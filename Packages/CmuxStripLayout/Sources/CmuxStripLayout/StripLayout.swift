@@ -254,6 +254,45 @@ public struct StripLayout: Equatable, Sendable, Codable {
         return true
     }
 
+    /// Replaces the focused column with an edited copy (e.g. after removing one window from
+    /// its stack). The column keeps its position; no other column changes. Re-clamps focus.
+    /// - Parameter column: The replacement column.
+    public mutating func replaceFocusedColumn(with column: StripColumn) {
+        guard columns.indices.contains(focusedColumnIndex) else { return }
+        columns[focusedColumnIndex] = column
+    }
+
+    /// Removes the window with the given id from whichever column contains it. If that empties
+    /// the column, the column is removed and the gap collapses (positions, not widths). Focus
+    /// and scroll are re-clamped.
+    /// - Parameters:
+    ///   - id: The window to remove.
+    ///   - viewportWidth: Current viewport width, used to re-clamp.
+    /// - Returns: `true` if a window was found and removed.
+    @discardableResult
+    public mutating func removeWindow(_ id: StripWindowID, viewportWidth: CGFloat) -> Bool {
+        guard let columnIndex = columns.firstIndex(where: { $0.windows.contains(id) }) else {
+            return false
+        }
+        guard let windowIndex = columns[columnIndex].windows.firstIndex(of: id) else { return false }
+        if columns[columnIndex].windows.count <= 1 {
+            removeColumn(at: columnIndex, viewportWidth: viewportWidth)
+        } else {
+            columns[columnIndex].windows.remove(at: windowIndex)
+            let clamped = min(columns[columnIndex].focusedWindowIndex, columns[columnIndex].windows.count - 1)
+            columns[columnIndex].focusedWindowIndex = max(0, clamped)
+        }
+        return true
+    }
+
+    /// Pans the viewport so the focused column is brought to the nearest edge it overflowed,
+    /// for a known viewport width. Public entry point to the niri scroll-to-edge behavior used
+    /// when seeding the strip (e.g. on mode enable).
+    /// - Parameter viewportWidth: Current viewport width.
+    public mutating func revealFocusedColumnForViewport(_ viewportWidth: CGFloat) {
+        revealFocusedColumn(viewportWidth: viewportWidth)
+    }
+
     /// Sets a column's intrinsic width directly (the only operation that legitimately resizes
     /// a column — an explicit user/programmatic resize), then re-clamps the scroll offset.
     /// - Parameters:

@@ -145,6 +145,18 @@ enum KeyboardShortcutSettings {
         case showBrowserJavaScriptConsole
         case toggleReactGrab
 
+        // niri-mode (scrollable strip layout)
+        case niriToggleMode
+        case niriNewColumn
+        case niriNewStackedWindow
+        case niriCloseColumn
+        case niriFocusColumnLeft
+        case niriFocusColumnRight
+        case niriFocusWindowUp
+        case niriFocusWindowDown
+        case niriMoveColumnLeft
+        case niriMoveColumnRight
+
         var id: String { rawValue }
 
         var label: String {
@@ -226,6 +238,16 @@ enum KeyboardShortcutSettings {
             case .toggleBrowserDeveloperTools: return String(localized: "shortcut.toggleBrowserDevTools.label", defaultValue: "Toggle Browser Developer Tools")
             case .showBrowserJavaScriptConsole: return String(localized: "shortcut.showBrowserJSConsole.label", defaultValue: "Show Browser JavaScript Console")
             case .toggleReactGrab: return String(localized: "shortcut.toggleReactGrab.label", defaultValue: "Toggle React Grab")
+            case .niriToggleMode: return String(localized: "shortcut.niriToggleMode.label", defaultValue: "Toggle Scrollable Strip Layout")
+            case .niriNewColumn: return String(localized: "shortcut.niriNewColumn.label", defaultValue: "Strip: New Column")
+            case .niriNewStackedWindow: return String(localized: "shortcut.niriNewStackedWindow.label", defaultValue: "Strip: New Stacked Window")
+            case .niriCloseColumn: return String(localized: "shortcut.niriCloseColumn.label", defaultValue: "Strip: Close Column")
+            case .niriFocusColumnLeft: return String(localized: "shortcut.niriFocusColumnLeft.label", defaultValue: "Strip: Focus Column Left")
+            case .niriFocusColumnRight: return String(localized: "shortcut.niriFocusColumnRight.label", defaultValue: "Strip: Focus Column Right")
+            case .niriFocusWindowUp: return String(localized: "shortcut.niriFocusWindowUp.label", defaultValue: "Strip: Focus Window Up")
+            case .niriFocusWindowDown: return String(localized: "shortcut.niriFocusWindowDown.label", defaultValue: "Strip: Focus Window Down")
+            case .niriMoveColumnLeft: return String(localized: "shortcut.niriMoveColumnLeft.label", defaultValue: "Strip: Move Column Left")
+            case .niriMoveColumnRight: return String(localized: "shortcut.niriMoveColumnRight.label", defaultValue: "Strip: Move Column Right")
             }
         }
 
@@ -401,6 +423,27 @@ enum KeyboardShortcutSettings {
                 return StoredShortcut(key: "c", command: true, shift: false, option: true, control: false)
             case .toggleReactGrab:
                 return StoredShortcut(key: "g", command: true, shift: true, option: false, control: false)
+            // niri-mode lives on the otherwise-unused Control+Option layer.
+            case .niriToggleMode:
+                return StoredShortcut(key: "s", command: false, shift: false, option: true, control: true)
+            case .niriNewColumn:
+                return StoredShortcut(key: "n", command: false, shift: false, option: true, control: true)
+            case .niriNewStackedWindow:
+                return StoredShortcut(key: "n", command: false, shift: true, option: true, control: true)
+            case .niriCloseColumn:
+                return StoredShortcut(key: "w", command: false, shift: false, option: true, control: true)
+            case .niriFocusColumnLeft:
+                return StoredShortcut(key: "←", command: false, shift: false, option: true, control: true)
+            case .niriFocusColumnRight:
+                return StoredShortcut(key: "→", command: false, shift: false, option: true, control: true)
+            case .niriFocusWindowUp:
+                return StoredShortcut(key: "↑", command: false, shift: false, option: true, control: true)
+            case .niriFocusWindowDown:
+                return StoredShortcut(key: "↓", command: false, shift: false, option: true, control: true)
+            case .niriMoveColumnLeft:
+                return StoredShortcut(key: "←", command: false, shift: true, option: true, control: true)
+            case .niriMoveColumnRight:
+                return StoredShortcut(key: "→", command: false, shift: true, option: true, control: true)
             }
         }
 
