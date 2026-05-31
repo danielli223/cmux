@@ -43,10 +43,23 @@ in any mode; the rest act only while the strip is active.
 
 These do not collide with the reserved bindings (⌘D, ⌘⇧D, ⌃Tab, ⌘⇧[ / ⌘⇧], ⌥⌘+arrows).
 
-## Trackpad
+## Scrolling & column snapping
 
-A horizontal two-finger scroll pans the strip continuously (pixel-for-pixel) and snaps to the
-nearest column edge on release. Vertical scroll falls through to the focused terminal.
+The scroll offset is **column-snapped**: it is always exactly some column's left edge, so the
+leftmost visible column always starts at the content-area origin (the sidebar's right edge).
+This matters because cmux's terminal portal resizes a partially-clipped surface — a half-off
+column would otherwise reflow to 1–2 characters wide, crushed against the sidebar. Two reveal
+policies share the model:
+
+- **Focus navigation** (`focus-column left/right`) pins the focused column to the **leading**
+  edge, so every key press pans the viewport by exactly one column (no "dead" presses while the
+  target is still visible).
+- **Structural changes** (open / close / restore) reveal the focused column at the **trailing**
+  edge, snapped to a boundary — the new column appears with its left-neighbours for context and
+  minimal trailing blank.
+
+A horizontal two-finger trackpad scroll pans continuously (pixel-for-pixel) and snaps to the
+nearest column boundary on release. Vertical scroll falls through to the focused terminal.
 
 ## Control socket (v1)
 

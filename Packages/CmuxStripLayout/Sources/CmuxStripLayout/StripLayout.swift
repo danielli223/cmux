@@ -137,7 +137,7 @@ public struct StripLayout: Equatable, Sendable, Codable {
         let insertionIndex = columns.isEmpty ? 0 : focusedColumnIndex + 1
         columns.insert(column, at: insertionIndex)
         focusedColumnIndex = insertionIndex
-        revealFocusedColumn(viewportWidth: viewportWidth)
+        revealFocusedColumnTrailing(viewportWidth: viewportWidth)
     }
 
     /// Removes the column at `index`, collapsing the gap it leaves: subsequent columns slide
@@ -159,7 +159,7 @@ public struct StripLayout: Equatable, Sendable, Codable {
         if focusedColumnIndex > index || focusedColumnIndex >= columns.count {
             focusedColumnIndex = max(0, min(focusedColumnIndex - 1, columns.count - 1))
         }
-        revealFocusedColumn(viewportWidth: viewportWidth)
+        revealFocusedColumnTrailing(viewportWidth: viewportWidth)
         return removed.id
     }
 
@@ -285,12 +285,12 @@ public struct StripLayout: Equatable, Sendable, Codable {
         return true
     }
 
-    /// Pans the viewport so the focused column is brought to the nearest edge it overflowed,
-    /// for a known viewport width. Public entry point to the niri scroll-to-edge behavior used
-    /// when seeding the strip (e.g. on mode enable).
+    /// Pans the viewport so the focused column is fully visible at a column boundary (the
+    /// leftmost visible column starts at the content origin, never a clipped sliver). Public
+    /// entry point used when seeding/restoring the strip (e.g. on mode enable).
     /// - Parameter viewportWidth: Current viewport width.
     public mutating func revealFocusedColumnForViewport(_ viewportWidth: CGFloat) {
-        revealFocusedColumn(viewportWidth: viewportWidth)
+        revealFocusedColumnTrailing(viewportWidth: viewportWidth)
     }
 
     /// Sets a column's intrinsic width directly (the only operation that legitimately resizes
@@ -336,18 +336,62 @@ public struct StripLayout: Equatable, Sendable, Codable {
 
     // MARK: - Internal scroll helpers
 
-    /// Pans ``scrollOffset`` the minimum amount so the focused column sits fully within the
-    /// viewport, aligned to the nearest edge it overflowed (niri scroll-to-edge default).
+    /// Pans so the focused column's left edge sits at the viewport's leading edge — which the
+    /// renderer maps to the content-area origin (the sidebar's right edge).
+    ///
+    /// This **column-snaps** the scroll offset to a column boundary, which fixes two coupled
+    /// problems with the older "scroll just to the nearest edge" policy:
+    ///
+    /// 1. The leftmost visible column always starts exactly at the content origin, so it is
+    ///    never partially clipped into a reflowed sliver crushed against the sidebar (cmux's
+    ///    terminal portal resizes a partially-clipped surface, so a half-off column would
+    ///    otherwise reflow to 1–2 characters wide).
+    /// 2. Each focus change moves the offset by exactly one column, so `focus-column` pans the
+    ///    viewport on **every** press instead of only once focus leaves the visible range.
+    ///
+    /// When the whole strip already fits the viewport, nothing scrolls. The offset is clamped
+    /// to the last column's left edge so the focused column is always fully visible (never a
+    /// sliver); the cost is that focusing the final column can leave trailing empty space,
+    /// which is preferred over crushing the focused terminal.
     private mutating func revealFocusedColumn(viewportWidth: CGFloat) {
         guard columns.indices.contains(focusedColumnIndex) else { return }
-        let left = columnLeftEdge(focusedColumnIndex)
-        let right = left + columns[focusedColumnIndex].width
-        if left < scrollOffset {
-            scrollOffset = left
-        } else if right > scrollOffset + viewportWidth {
-            scrollOffset = right - viewportWidth
+        guard totalContentWidth > viewportWidth else {
+            scrollOffset = 0
+            return
         }
-        clampScroll(viewportWidth: viewportWidth)
+        let maxAnchor = columnLeftEdge(columns.count - 1)
+        scrollOffset = max(0, min(columnLeftEdge(focusedColumnIndex), maxAnchor))
+    }
+
+    /// Reveals the focused column at the viewport's **trailing** edge, column-snapped: scrolls
+    /// so the focused column's right edge sits within the viewport, then snaps the offset up to
+    /// the nearest column boundary so the leftmost visible column starts at the content origin
+    /// (never a clipped left sliver).
+    ///
+    /// Used for structural changes (open / close / restore) so a newly focused column appears
+    /// with its left-neighbors for context and minimal trailing blank — unlike
+    /// ``revealFocusedColumn``, which pins the focused column to the leading edge so keyboard
+    /// focus navigation pans by exactly one column per press.
+    private mutating func revealFocusedColumnTrailing(viewportWidth: CGFloat) {
+        guard columns.indices.contains(focusedColumnIndex) else { return }
+        guard totalContentWidth > viewportWidth else {
+            scrollOffset = 0
+            return
+        }
+        let focusedLeft = columnLeftEdge(focusedColumnIndex)
+        let focusedRight = focusedLeft + columns[focusedColumnIndex].width
+        let trailingTarget = max(0, focusedRight - viewportWidth)
+        // Smallest column boundary >= the scroll-to-edge target keeps the leftmost visible
+        // column whole; never scroll past the focused column's own left edge (keeps it visible).
+        var snapped = focusedLeft
+        for index in columns.indices {
+            let edge = columnLeftEdge(index)
+            if edge >= trailingTarget {
+                snapped = edge
+                break
+            }
+        }
+        scrollOffset = max(0, min(snapped, focusedLeft))
     }
 
     /// Clamps ``scrollOffset`` into `0...maxScrollOffset(for:)`.

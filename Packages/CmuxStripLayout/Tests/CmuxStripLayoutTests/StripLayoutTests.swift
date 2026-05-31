@@ -57,6 +57,31 @@ import Testing
         #expect(strip.focusedColumn?.id == columnID(9))
     }
 
+    /// Opening a terminal while focused on the last column reveals the new column at the
+    /// trailing edge with its left-neighbor visible (column-snapped), rather than pinning it
+    /// alone at the leading edge with a large trailing blank. Offset stays a column boundary so
+    /// the leftmost visible column is never a sliver.
+    @Test func openingAtEndRevealsNewColumnWithContext() {
+        // 4 columns, 640 wide, gap 8, viewport 1380 -> ~2 columns fit.
+        var strip = StripLayout(
+            columns: (1...4).map { column($0, width: 640) },
+            focusedColumnIndex: 3, // focused on the last column
+            gap: 8
+        )
+        strip.insertColumn(column(9, width: 640), viewportWidth: 1380)
+        let boundaries = Set(strip.columns.indices.map { strip.columnLeftEdge($0) })
+        // Offset is a column boundary (leftmost visible column starts at the content origin).
+        #expect(boundaries.contains(strip.scrollOffset))
+        // The new column is the focused one and is fully visible (not clipped).
+        #expect(strip.focusedColumnIndex == 4)
+        let frames = strip.columnFrames(in: CGRect(x: 0, y: 0, width: 1380, height: 1000))
+        let focusedFrame = frames[4].frame
+        #expect(focusedFrame.minX >= 0)
+        #expect(focusedFrame.maxX <= 1380) // fully within the viewport, no sliver
+        // At least one column is visible to the LEFT of the new one (context, not alone+blank).
+        #expect(frames[3].isVisible == true)
+    }
+
     @Test func insertIntoEmptyStrip() {
         var strip = StripLayout()
         strip.insertColumn(column(1, width: 400), viewportWidth: 800)
@@ -73,29 +98,48 @@ import Testing
         let widthsBefore = strip.columns.map(\.width)
 
         #expect(strip.scrollOffset == 0)
-        // Column 2 (index 1) spans [600,1200); offscreen-right of an 800 viewport.
+        // Focus column 2 (index 1): its left edge (600) anchors to the viewport's leading
+        // edge -> offset 600. Every focus press pans by exactly one column.
         strip.focusColumn(.right, viewportWidth: 800)
-        // Scrolled enough to bring its right edge (1200) to viewport right -> offset 400.
         #expect(strip.focusedColumnIndex == 1)
-        #expect(strip.scrollOffset == 400)
+        #expect(strip.scrollOffset == 600)
         // No widths changed.
         #expect(strip.columns.map(\.width) == widthsBefore)
 
-        // Focus column 3 (index 2) spanning [1200,1800) -> offset 1000.
+        // Focus column 3 (index 2): left edge 1200 anchors to leading edge -> offset 1200.
         strip.focusColumn(.right, viewportWidth: 800)
         #expect(strip.focusedColumnIndex == 2)
-        #expect(strip.scrollOffset == 1000)
+        #expect(strip.scrollOffset == 1200)
         #expect(strip.columns.map(\.width) == widthsBefore)
     }
 
-    @Test func focusColumnLeftPansBackToEdge() {
+    @Test func focusColumnLeftPansBackByOneColumn() {
         var strip = threeColumns(viewportWidth: 800)
         strip.focusColumn(.right, viewportWidth: 800)
-        strip.focusColumn(.right, viewportWidth: 800) // offset 1000, focus index 2
+        strip.focusColumn(.right, viewportWidth: 800) // offset 1200, focus index 2
         strip.focusColumn(.left, viewportWidth: 800)  // back to index 1
-        // Column 1 (index 1) left edge 600 < offset 1000 -> snap offset to left edge 600.
+        // Column 1 (index 1) left edge 600 anchors to the leading edge -> offset 600.
         #expect(strip.focusedColumnIndex == 1)
         #expect(strip.scrollOffset == 600)
+    }
+
+    /// Bug fix: every single focus-column press advances focus by one AND pans the viewport
+    /// (the old scroll-to-edge policy only panned once the target left the visible range, so
+    /// the first press(es) appeared to do nothing).
+    @Test func everyFocusColumnPressPansByOneColumn() {
+        // 5 columns, 600 wide, viewport 800 -> strip overflows; panning is possible.
+        var strip = StripLayout(
+            columns: (1...5).map { column($0, width: 600) },
+            focusedColumnIndex: 0
+        )
+        var lastOffset = strip.scrollOffset
+        for expectedIndex in 1...4 {
+            let moved = strip.focusColumn(.right, viewportWidth: 800)
+            #expect(moved == true)
+            #expect(strip.focusedColumnIndex == expectedIndex) // advanced by exactly one
+            #expect(strip.scrollOffset != lastOffset)          // offset updated on every press
+            lastOffset = strip.scrollOffset
+        }
     }
 
     @Test func focusColumnAtEdgeReturnsFalseAndDoesNotMove() {
@@ -161,6 +205,55 @@ import Testing
         let dframes = deep.columnFrames(in: CGRect(x: 0, y: 0, width: 800, height: 1000))
         #expect(dframes[0].frame.maxX == -400) // [-1000,-400], entirely left of viewport
         #expect(dframes[0].isVisible == false)
+    }
+
+    // MARK: - Bug fix: first column starts at the content-area origin at full width
+
+    /// The renderer passes the *content area* (window minus sidebar) as the viewport, with its
+    /// own local origin. The first column must sit exactly at that origin at its full intended
+    /// width — never squeezed to a sliver against the sidebar — whether the sidebar is open
+    /// (narrower content area) or closed (wider). Verified by varying the viewport width.
+    @Test(arguments: [
+        CGFloat(900),   // sidebar open: narrower content area
+        CGFloat(1400),  // sidebar closed: wider content area
+    ])
+    func firstColumnStartsAtContentOriginAtFullWidth(contentWidth: CGFloat) {
+        let intended: CGFloat = 640
+        var strip = StripLayout(
+            columns: (1...4).map { column($0, width: intended) },
+            focusedColumnIndex: 0,
+            gap: 8
+        )
+        // Focus the first column (the renderer's content-area origin maps to viewport.minX).
+        strip.focusColumn(.left, viewportWidth: contentWidth) // already at 0; ensures anchored
+        let content = CGRect(x: 0, y: 0, width: contentWidth, height: 1000)
+        let frames = strip.columnFrames(in: content)
+        // First column: left edge exactly at the content-area origin, full intended width.
+        #expect(frames[0].frame.minX == content.minX)
+        #expect(frames[0].frame.width == intended)
+        #expect(frames[0].isVisible == true)
+    }
+
+    /// The leftmost visible column always starts at the content-area origin: the scroll offset
+    /// is always exactly some column's left edge (a column boundary). This is what prevents a
+    /// partially-clipped left column from being reflowed into a sliver by the terminal portal.
+    @Test func scrollOffsetIsAlwaysAColumnBoundaryAfterFocus() {
+        var strip = StripLayout(
+            columns: (1...6).map { column($0, width: 600) },
+            focusedColumnIndex: 0,
+            gap: 8
+        )
+        let boundaries = Set(strip.columns.indices.map { strip.columnLeftEdge($0) })
+        // Walk right across the whole strip; after every focus change the offset is a boundary.
+        for _ in 0..<5 {
+            strip.focusColumn(.right, viewportWidth: 900)
+            #expect(boundaries.contains(strip.scrollOffset))
+        }
+        // ...and back left.
+        for _ in 0..<5 {
+            strip.focusColumn(.left, viewportWidth: 900)
+            #expect(boundaries.contains(strip.scrollOffset))
+        }
     }
 
     // MARK: - Invariant 4: focusWindowDown/Up stays within a column
@@ -252,15 +345,18 @@ import Testing
         #expect(strip.columnLeftEdge(1) == 500)
     }
 
-    @Test func removeColumnClampsScrollOffset() {
-        var strip = threeColumns(viewportWidth: 800) // total 1800, max offset 1000
+    @Test func removeColumnReanchorsToColumnBoundary() {
+        var strip = threeColumns(viewportWidth: 800) // total 1800
         strip.focusColumn(.right, viewportWidth: 800)
-        strip.focusColumn(.right, viewportWidth: 800) // offset 1000, focus last
-        #expect(strip.scrollOffset == 1000)
-        strip.removeColumn(at: 2, viewportWidth: 800) // now total 1200, max offset 400
-        #expect(strip.scrollOffset <= strip.maxScrollOffset(for: 800))
-        #expect(strip.scrollOffset == 400)
+        strip.focusColumn(.right, viewportWidth: 800) // focus last, offset 1200 (leftEdge 2)
+        #expect(strip.scrollOffset == 1200)
+        strip.removeColumn(at: 2, viewportWidth: 800) // remove focused -> focus index 1 (now last)
         #expect(strip.focusedColumnIndex == 1)
+        // Offset re-anchors to the (now last) focused column's left edge -> a column boundary,
+        // so the focused column stays fully visible and the leftmost visible column starts at
+        // the content origin (no left sliver). Trailing blank is preferred over a sliver.
+        #expect(strip.scrollOffset == strip.columnLeftEdge(1))
+        #expect(strip.scrollOffset == 600)
     }
 
     @Test func removeLastRemainingColumnResetsStrip() {
