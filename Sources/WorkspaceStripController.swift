@@ -1,6 +1,7 @@
 import CmuxStripLayout
 import CoreGraphics
 import Foundation
+import QuartzCore
 
 /// Per-workspace controller that owns the niri-style strip and bridges it to real cmux
 /// terminal panels.
@@ -57,6 +58,33 @@ final class WorkspaceStripController: ObservableObject {
     /// bottom), so a tabbed column shows all its terminals in the overview. Rendered as scaled
     /// text in the tiles — see `docs/niri-mode.md` for why text rather than live/snapshot pixels.
     @Published private(set) var overviewThumbnails: [StripColumnID: [String]] = [:]
+
+    /// Per-window frozen color snapshots captured when the overview opens, keyed by panel id
+    /// (``StripWindowID/raw``). Used for off-screen columns that are no longer rendering: their
+    /// tiles show this color image rather than a live mirror or monochrome text.
+    @Published private(set) var overviewFrozenImages: [UUID: CGImage] = [:]
+
+    /// The column ids that were on-screen (actively rendering) when the overview opened, and are
+    /// therefore mirrored **live**. Drives both the canvas render-but-suppress gate and the tile
+    /// mode. Off-screen columns are absent and show a frozen snapshot.
+    @Published private(set) var overviewLiveColumnIDs: Set<StripColumnID> = []
+
+    /// Window ids whose live mirror should refresh this tick (published so the tile views observe
+    /// it). Produced by draining ``refreshThrottle`` at ~12fps.
+    @Published private(set) var pendingMirrorRefresh: Set<StripWindowID> = []
+
+    /// Held for the whole overview session so `.ghosttyDidRenderFrame` keeps firing for the live
+    /// columns. Released on overview exit.
+    private var renderFrameToken: (() -> Void)?
+
+    /// Coalesces per-surface frame notifications into ~12fps mirror refreshes.
+    private var refreshThrottle = FrameRefreshThrottle(interval: 1.0 / 12.0, startTime: 0)
+
+    /// Observes `.ghosttyDidRenderFrame` while the overview is open; marks the matching tile dirty.
+    private var frameObserver: NSObjectProtocol?
+
+    /// Drains ``refreshThrottle`` on a repeating timer while the overview is open.
+    private var refreshTimer: Timer?
 
     /// Saved viewport (focused column + scroll offset) captured when the overview opens, so
     /// cancelling returns to the exact prior state.
@@ -247,8 +275,18 @@ final class WorkspaceStripController: ObservableObject {
         savedFocusBeforeOverview = layout.focusedColumnIndex
         savedOffsetBeforeOverview = layout.scrollOffset
         overviewSelectionIndex = layout.focusedColumnIndex
-        captureOverviewThumbnails()
+
+        // Columns rendering now (on-screen in the pre-overview viewport) are mirrored live; the
+        // rest are frozen. `isVisible` comes from the same pure frame math the canvas uses.
+        let viewport = CGRect(x: 0, y: 0, width: viewportWidth, height: 1)
+        let visibleIDs = Set(layout.columnFrames(in: viewport).filter(\.isVisible).map(\.id))
+        overviewLiveColumnIDs = visibleIDs
+
+        captureOverviewThumbnails()                 // text fallback (all columns)
+        captureFrozenImages(excluding: visibleIDs)  // color freeze for off-screen columns
+
         isOverviewActive = true
+        startMirrorRefresh()
     }
 
     /// Snapshots every stacked window's terminal text per column, for the overview tiles.
@@ -264,12 +302,68 @@ final class WorkspaceStripController: ObservableObject {
         overviewThumbnails = thumbnails
     }
 
+    /// Captures a one-time color snapshot for every window in a column NOT in `live` (off-screen,
+    /// not rendering), so those tiles freeze in color instead of falling back to text.
+    /// - Parameter live: The column ids that will be mirrored live (and so need no frozen image).
+    private func captureFrozenImages(excluding live: Set<StripColumnID>) {
+        guard let bridge else { return }
+        var images: [UUID: CGImage] = [:]
+        for column in layout.columns where !live.contains(column.id) {
+            for window in column.windows {
+                if let image = bridge.stripCaptureThumbnailImage(for: window.raw) {
+                    images[window.raw] = image
+                }
+            }
+        }
+        overviewFrozenImages = images
+    }
+
+    /// Starts the live-mirror pump: retains the rendered-frame notification demand, observes
+    /// per-surface frame notifications (marking the matching tile dirty), and drains the throttle
+    /// on a repeating timer so live tiles refresh at ~12fps regardless of terminal output rate.
+    private func startMirrorRefresh() {
+        renderFrameToken = GhosttyNSView.retainRenderedFrameNotifications()
+        refreshThrottle = FrameRefreshThrottle(interval: 1.0 / 12.0, startTime: CACurrentMediaTime())
+        frameObserver = NotificationCenter.default.addObserver(
+            forName: .ghosttyDidRenderFrame, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self,
+                      let panelID = self.bridge?.stripPanelID(forSurfaceObject: note.object) else { return }
+                self.refreshThrottle.markDirty(StripWindowID(panelID))
+            }
+        }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let due = self.refreshThrottle.drain(now: CACurrentMediaTime())
+                if !due.isEmpty { self.pendingMirrorRefresh = due }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    /// Stops the live-mirror pump and clears all overview render state. Idempotent.
+    private func stopMirrorRefresh() {
+        if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+        frameObserver = nil
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        renderFrameToken?()
+        renderFrameToken = nil
+        pendingMirrorRefresh = []
+        overviewFrozenImages = [:]
+        overviewLiveColumnIDs = []
+    }
+
     /// Cancels the overview without changing the selection, restoring the exact viewport
     /// (focused column + scroll offset) from when it opened.
     func cancelOverview() {
         guard isOverviewActive else { return }
         isOverviewActive = false
         overviewThumbnails = [:]
+        stopMirrorRefresh()
         layout.restoreViewport(
             focusedColumnIndex: savedFocusBeforeOverview,
             scrollOffset: savedOffsetBeforeOverview
@@ -306,6 +400,7 @@ final class WorkspaceStripController: ObservableObject {
         let target = overviewSelectionIndex
         isOverviewActive = false
         overviewThumbnails = [:]
+        stopMirrorRefresh()
         layout.setFocusedColumn(target, viewportWidth: viewportWidth)
         if let panelID = layout.focusedColumn?.focusedWindow?.raw {
             bridge?.stripFocusPanel(panelID)
