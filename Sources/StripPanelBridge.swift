@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import QuartzCore
 
 /// The seam between ``WorkspaceStripController`` (pure-ish niri strip logic) and the cmux
 /// ``Workspace`` (terminal panel lifecycle, focus, Bonsplit backing store).
@@ -49,4 +51,22 @@ protocol StripPanelBridge: AnyObject {
     /// signal: full-width columns report tens; a sliver reports ~1. `nil` for non-terminals.
     /// - Parameter panelID: The panel to measure.
     func stripTerminalGridColumns(for panelID: UUID) -> Int?
+
+    /// The live Core Animation layer (a `GhosttyMetalLayer`) backing the panel's terminal surface,
+    /// or `nil` for non-terminal/headless panels. The niri overview mirrors this layer's presented
+    /// `IOSurface` into a scaled tile without resizing — and thus without reflowing — the source.
+    /// - Parameter panelID: The panel whose live layer to resolve.
+    func stripSourceSurfaceLayer(for panelID: UUID) -> CALayer?
+
+    /// A one-time color snapshot of the panel's terminal as a `CGImage`, captured from the current
+    /// presented `IOSurface`. Returns `nil` when the surface has no recent frame. The niri overview
+    /// uses this to freeze off-screen tiles in color.
+    /// - Parameter panelID: The panel to snapshot.
+    func stripCaptureThumbnailImage(for panelID: UUID) -> CGImage?
+
+    /// Resolves a `.ghosttyDidRenderFrame` notification object (the surface's `GhosttyNSView`) back
+    /// to its panel id, or `nil` if the object is not a known terminal surface view. Lets the niri
+    /// overview route per-surface frame notifications to the right tile.
+    /// - Parameter object: The notification's `object` (a `GhosttyNSView`).
+    func stripPanelID(forSurfaceObject object: Any?) -> UUID?
 }

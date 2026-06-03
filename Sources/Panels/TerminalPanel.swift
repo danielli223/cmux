@@ -215,6 +215,12 @@ final class TerminalPanel: Panel, ObservableObject {
         return String(decoding: Data(bytes: ptr, count: Int(text.text_len)), as: UTF8.self)
     }
 
+    /// The live Metal layer presenting this terminal's frames, or `nil` if the surface is gone.
+    /// Used by the niri overview to mirror the surface's `IOSurface` into a scaled tile.
+    func liveSurfaceLayer() -> CALayer? {
+        hostedView.liveSurfaceLayer
+    }
+
     func updateDirectory(_ newDirectory: String) {
         let trimmed = newDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty && directory != trimmed {
