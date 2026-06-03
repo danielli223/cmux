@@ -27,6 +27,7 @@ struct StripCanvasView: NSViewControllerRepresentable {
         controller.sync(
             layout: stripController.layout,
             isOverviewActive: stripController.isOverviewActive,
+            overviewLiveColumnIDs: stripController.overviewLiveColumnIDs,
             isColumnFullscreen: stripController.isColumnFullscreen,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
@@ -50,12 +51,15 @@ struct StripCanvasView: NSViewControllerRepresentable {
                     paneId: paneId,
                     isFocused: isWorkspaceInputActive && isColumnFocused,
                     isSelectedInPane: true,
-                    // Hide the live terminal portals while the overview is up (the portal is a
-                    // window-level layer above SwiftUI, so it would otherwise show through the
-                    // dimmed overview). Terminals keep running; only rendering is gated. When a
-                    // column is fullscreened, the non-focused columns are likewise hidden so only
-                    // the expanded column's portal renders.
-                    isVisibleInUI: isWorkspaceVisible && !stripController.isOverviewActive
+                    // While the overview is up, the previously-visible (on-screen) columns keep
+                    // rendering so their tiles can mirror a live color feed — they are visually
+                    // suppressed in `reconcile` (host hidden) so the window-level portal does not
+                    // bleed over the overview. Off-screen columns stay occluded (frozen tiles).
+                    // When a column is fullscreened, the non-focused columns are likewise hidden so
+                    // only the expanded column's portal renders.
+                    isVisibleInUI: isWorkspaceVisible
+                        && (!stripController.isOverviewActive
+                            || stripController.overviewLiveColumnIDs.contains(column.id))
                         && (!stripController.isColumnFullscreen || isColumnFocused),
                     portalPriority: workspacePortalPriority,
                     isSplit: stripController.layout.columns.count > 1,
@@ -140,6 +144,7 @@ final class StripCanvasViewController: NSViewController {
     private struct SyncInputs {
         let layout: StripLayout
         let isOverviewActive: Bool
+        let overviewLiveColumnIDs: Set<StripColumnID>
         let isColumnFullscreen: Bool
         let isWorkspaceInputActive: Bool
         let isWorkspaceVisible: Bool
@@ -170,7 +175,11 @@ final class StripCanvasViewController: NSViewController {
     /// Reconciles the hosted column views with the current ``StripLayout``.
     /// - Parameters:
     ///   - layout: The current strip model.
-    ///   - isOverviewActive: When true, hide the live terminals (the overview tiles cover them).
+    ///   - isOverviewActive: When true, the overview tiles cover the canvas. Columns in
+    ///     `overviewLiveColumnIDs` keep rendering (for live tiles) but are hidden in place; the
+    ///     rest are occluded.
+    ///   - overviewLiveColumnIDs: Column ids that stay rendering-but-suppressed during the overview
+    ///     so their tiles can mirror a live color feed.
     ///   - isColumnFullscreen: When true, the focused column fills the viewport and the others are
     ///     parked off-screen with their portals hidden.
     ///   - isWorkspaceInputActive: Whether this workspace has keyboard focus.
@@ -179,6 +188,7 @@ final class StripCanvasViewController: NSViewController {
     func sync(
         layout: StripLayout,
         isOverviewActive: Bool,
+        overviewLiveColumnIDs: Set<StripColumnID>,
         isColumnFullscreen: Bool,
         isWorkspaceInputActive: Bool,
         isWorkspaceVisible: Bool,
@@ -187,6 +197,7 @@ final class StripCanvasViewController: NSViewController {
         let inputs = SyncInputs(
             layout: layout,
             isOverviewActive: isOverviewActive,
+            overviewLiveColumnIDs: overviewLiveColumnIDs,
             isColumnFullscreen: isColumnFullscreen,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
@@ -226,11 +237,16 @@ final class StripCanvasViewController: NSViewController {
             // rest are parked off-screen (their portals are also hidden via `isVisibleInUI`); a
             // strip-space x keeps them laid out but fully outside the visible canvas.
             let frame: CGRect
+            // A full-size frame parked entirely outside the visible canvas. Used both for
+            // fullscreen's non-focused columns and for the overview's live-mirrored columns: the
+            // portal keeps rendering (the size is unchanged, so it never reflows) but sits
+            // off-screen, so it cannot bleed over the overview tiles that mirror it.
+            let parkedOffscreen = CGRect(x: -(viewport.width + column.width + 200), y: 0,
+                                         width: column.width, height: viewport.height)
             if isColumnFullscreen {
-                frame = isFocused
-                    ? viewport
-                    : CGRect(x: -(viewport.width + column.width + 200), y: 0,
-                             width: column.width, height: viewport.height)
+                frame = isFocused ? viewport : parkedOffscreen
+            } else if isOverviewActive, inputs.overviewLiveColumnIDs.contains(column.id) {
+                frame = parkedOffscreen
             } else {
                 frame = frames[index].frame
             }
@@ -244,6 +260,9 @@ final class StripCanvasViewController: NSViewController {
                 inputs.isWorkspaceInputActive ? "a" : "-",
                 inputs.isWorkspaceVisible ? "v" : "-",
                 isOverviewActive ? "o" : "-", // toggling overview flips isVisibleInUI -> rebuild
+                // live-mirrored columns stay visible (un-occluded) during the overview, so their
+                // membership in the live set must invalidate the cached content.
+                inputs.overviewLiveColumnIDs.contains(column.id) ? "L" : "-",
                 isColumnFullscreen ? "z" : "-", // toggling fullscreen flips isVisibleInUI -> rebuild
             ].joined(separator: "|")
             live.insert(column.id)
@@ -283,10 +302,12 @@ final class StripCanvasViewController: NSViewController {
 
         // Translating a column moves the terminal's host view in window space without changing
         // its own frame, so the GPU portal's frame observer never fires. Force every portal in
-        // the window to re-read its anchor frame so terminals follow the column positions. Skip
-        // while the overview is up: the live portals are hidden there, and re-syncing them can
-        // briefly flash the previously-focused terminal through the dimmed overview.
-        if didReposition, !isOverviewActive, let window = view.window {
+        // the window to re-read its anchor frame so terminals follow the column positions. This
+        // must also run while the overview is up: the live-mirrored columns are parked off-screen,
+        // and their portals only follow that move once re-synced (otherwise they bleed over the
+        // overview). Off-screen columns are occluded (`isVisibleInUI = false`), so re-syncing them
+        // is a no-op — no terminal flashes through the dimmed overview.
+        if didReposition, let window = view.window {
             TerminalWindowPortalRegistry.scheduleExternalGeometrySynchronize(for: window)
         }
     }
