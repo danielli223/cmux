@@ -86,16 +86,31 @@ cancels and restores the exact prior viewport (focused column + scroll offset). 
 `NSEvent` monitor (installed on hold-start, removed on commit/cancel) drives the release
 detection. The scale transition is animated (spring); its smoothness is a manual-review item.
 
-**Thumbnails — decision:** each tile renders a **text snapshot** of every window in the column —
-for a tabbed column the windows stack top-to-bottom as mini-screens (the active one outlined),
-matching the real column — captured via `ghostty_surface_read_text` when the overview opens and
-drawn as scaled monospace text on a dark tile. Rationale: cmux terminals are GPU-portal windows that render above
-SwiftUI and **reflow** when their host frame shrinks (the mechanism behind the sliver bug), so a
-live scaled portal doesn't visually shrink; and Ghostty exposes no per-cell colour API, so a true
-pixel snapshot can't be reconstructed for off-screen columns. Reading the cell-text grid works for
-**all** columns (on- and off-screen), is cheap, and is arguably more useful for terminals — you
-can read what's there. While the overview is open the live portals are gated off
-(`isVisibleInUI = false`) so the tiles aren't covered; the terminal processes keep running.
+**Tiles — live color feed:** each tile shows the column's real terminal content, in color, for
+every window (a tabbed column stacks its windows top-to-bottom as mini-screens, the active one
+outlined). The presentation per window is picked by the pure `overviewTileMode(for:)`
+(`CmuxStripLayout`):
+
+- **Live** — for columns that were **on-screen (rendering)** when the overview opened. The tile is
+  an `OverviewMirrorView` whose layer `contents` points at the source `GhosttyMetalLayer`'s
+  presented `IOSurface` (`contentsGravity = .resizeAspectFill`), so the live frame scales down for
+  free. The source is **never resized**, so it never reflows — the constraint that ruled out a
+  naive scaled portal (the sliver-bug mechanism). To keep these columns rendering without bleeding
+  over the overview, `StripCanvasView` parks them **full-size off-screen** while the overview is
+  open (their `isVisibleInUI` stays true; the portal geometry re-sync runs during the overview so
+  the portals follow the parked frames). Refreshes are driven by the refcounted
+  `.ghosttyDidRenderFrame` notification and coalesced to ~12fps by the pure `FrameRefreshThrottle`.
+- **Frozen** — for **off-screen** columns (already occluded, not producing frames before the
+  overview). A one-time color `CGImage` is captured from the surface's current `IOSurface` at
+  overview-open (`stripCaptureThumbnailImage`) and shown statically. We do **not** force off-screen
+  columns to keep rendering — that bounds GPU cost and avoids the hard "render while hidden"
+  question.
+- **Text** — deepest fallback: the original scaled monospace `ghostty_surface_read_text` snapshot,
+  used when a window has neither a live source nor a captured color frame.
+
+Suppression mechanism: live columns are **parked off-screen** (not hidden in place). This was
+chosen over hiding the host so it cannot reintroduce the portal "bleed" over the overview backdrop,
+and because a full-size off-screen frame keeps the surface rendering without a reflow.
 
 ## Control socket (v1)
 
