@@ -317,6 +317,7 @@
 		D1BEF00002A1B2C3D4E5F719 /* open in Copy CLI */ = {isa = PBXBuildFile; fileRef = D1BEF00001A1B2C3D4E5F719 /* open */; };
 		FEED0000000000000000F007 /* opencode-plugin.js in Resources */ = {isa = PBXBuildFile; fileRef = FEED0000000000000000F006 /* opencode-plugin.js */; };
 		A5E01203A1B2C3D4E5F60718 /* OpenCodeHookRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E01204A1B2C3D4E5F60718 /* OpenCodeHookRegressionTests.swift */; };
+		B5740103 /* OverviewMirrorTile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5740104 /* OverviewMirrorTile.swift */; };
 		B5740101 /* OverviewMirrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5740102 /* OverviewMirrorView.swift */; };
 		D0B1001CA1B2C3D4E5F60001 /* PaneDropRoutingSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0B1001DA1B2C3D4E5F60001 /* PaneDropRoutingSupport.swift */; };
 		A5001400 /* Panel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001410 /* Panel.swift */; };
@@ -912,6 +913,7 @@
 		D1BEF00001A1B2C3D4E5F719 /* open */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = Resources/bin/open; sourceTree = SOURCE_ROOT; };
 		FEED0000000000000000F006 /* opencode-plugin.js */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.javascript; path = "opencode-plugin.js"; sourceTree = "<group>"; };
 		A5E01204A1B2C3D4E5F60718 /* OpenCodeHookRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeHookRegressionTests.swift; sourceTree = "<group>"; };
+		B5740104 /* OverviewMirrorTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewMirrorTile.swift; sourceTree = "<group>"; };
 		B5740102 /* OverviewMirrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewMirrorView.swift; sourceTree = "<group>"; };
 		D0B1001DA1B2C3D4E5F60001 /* PaneDropRoutingSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneDropRoutingSupport.swift; sourceTree = "<group>"; };
 		A5001410 /* Panel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/Panel.swift; sourceTree = "<group>"; };
@@ -1386,6 +1388,7 @@
 					E3309A0E /* SplitEqualizer.swift */,
 					B5740002 /* StripCanvasView.swift */,
 					B5740102 /* OverviewMirrorView.swift */,
+					B5740104 /* OverviewMirrorTile.swift */,
 					B5710002 /* WorkspaceLayoutMode.swift */,
 					B5710004 /* StripPanelBridge.swift */,
 					B5710006 /* WorkspaceStripController.swift */,
@@ -2248,6 +2251,7 @@
 				3865A0033865A0033865A003 /* MenubarSearchPopover.swift in Sources */,
 				C0DE3150A00000000000001 /* MinimalModeSidebarControls.swift in Sources */,
 					A5001094 /* NotificationsPage.swift in Sources */,
+					B5740103 /* OverviewMirrorTile.swift in Sources */,
 					B5740101 /* OverviewMirrorView.swift in Sources */,
 				D0B1001CA1B2C3D4E5F60001 /* PaneDropRoutingSupport.swift in Sources */,
 				A5001400 /* Panel.swift in Sources */,

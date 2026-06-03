@@ -106,11 +106,14 @@ struct StripWorkspaceView: View {
                 // Stacked windows render as a vertical column of mini-screens (top to bottom,
                 // matching the real column), with the active window emphasized.
                 VStack(spacing: 2) {
-                    ForEach(Array(windowTexts.enumerated()), id: \.offset) { entry in
+                    ForEach(Array(column.windows.enumerated()), id: \.element.raw) { entry in
                         windowMiniScreen(
-                            text: entry.element,
+                            text: entry.offset < windowTexts.count ? windowTexts[entry.offset] : "",
+                            panelID: entry.element.raw,
+                            windowID: entry.element,
+                            columnID: column.id,
                             isActiveWindow: entry.offset == column.focusedWindowIndex,
-                            isStacked: windowTexts.count > 1,
+                            isStacked: column.windows.count > 1,
                             accent: accent
                         )
                     }
@@ -155,30 +158,52 @@ struct StripWorkspaceView: View {
             }
     }
 
-    /// One window's text snapshot inside an overview tile. When a column is stacked (tabbed),
-    /// each window gets an equal vertical slice and the active one is outlined.
+    /// One window's content inside an overview tile: a live color mirror when its column is still
+    /// rendering (on-screen), a frozen color snapshot when it is off-screen, or the scaled-text
+    /// fallback when no frame is available. When a column is stacked (tabbed), each window gets an
+    /// equal vertical slice and the active one is outlined.
     @ViewBuilder
-    private func windowMiniScreen(text: String, isActiveWindow: Bool, isStacked: Bool, accent: Color) -> some View {
-        Text(text.isEmpty ? " " : text)
-            .font(.system(size: 5.5, weight: .regular, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(isActiveWindow ? 0.82 : 0.5))
-            .lineLimit(nil)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, 3)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.black.opacity(isStacked ? 0.30 : 0.0))
-            )
-            .overlay(
-                isStacked
-                    ? RoundedRectangle(cornerRadius: 3)
-                        .strokeBorder(isActiveWindow ? accent.opacity(0.9) : Color.white.opacity(0.12),
-                                      lineWidth: isActiveWindow ? 1.5 : 0.5)
-                    : nil
-            )
-            .clipped()
+    private func windowMiniScreen(text: String, panelID: UUID, windowID: StripWindowID,
+                                  columnID: StripColumnID, isActiveWindow: Bool,
+                                  isStacked: Bool, accent: Color) -> some View {
+        let isLive = stripController.overviewLiveColumnIDs.contains(columnID)
+        let frozen = stripController.overviewFrozenImages[panelID]
+        let mode = overviewTileMode(for: OverviewTileSource(
+            isRendering: isLive, hasFrozenImage: frozen != nil, hasText: !text.isEmpty))
+        ZStack {
+            if mode == .text {
+                Text(text.isEmpty ? " " : text)
+                    .font(.system(size: 5.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(isActiveWindow ? 0.82 : 0.5))
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 2)
+            } else {
+                OverviewMirrorTile(
+                    panelID: panelID,
+                    windowID: windowID,
+                    mode: mode,
+                    sourceLayer: isLive ? stripController.bridge?.stripSourceSurfaceLayer(for: panelID) : nil,
+                    frozenImage: frozen,
+                    pendingRefresh: stripController.pendingMirrorRefresh
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.black.opacity(isStacked ? 0.30 : 0.0))
+        )
+        .overlay(
+            isStacked
+                ? RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(isActiveWindow ? accent.opacity(0.9) : Color.white.opacity(0.12),
+                                  lineWidth: isActiveWindow ? 1.5 : 0.5)
+                : nil
+        )
+        .clipped()
     }
 
     private func overviewColumnTitle(column: StripColumn, index: Int) -> String {
