@@ -30,6 +30,7 @@ struct StripCanvasView: NSViewControllerRepresentable {
             overviewLiveColumnIDs: stripController.overviewLiveColumnIDs,
             isColumnFullscreen: stripController.isColumnFullscreen,
             isAnimatingScroll: stripController.isAnimatingScroll,
+            openingColumn: stripController.openingColumnSnapshot,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
             buildContent: { column, isColumnFocused, shouldRender in
@@ -154,6 +155,9 @@ final class StripCanvasViewController: NSViewController {
         let overviewLiveColumnIDs: Set<StripColumnID>
         let isColumnFullscreen: Bool
         let isAnimatingScroll: Bool
+        /// The column growing in via the niri open animation (id + full target width), or `nil`. Its
+        /// portal is kept parked at full width so the terminal never reflows to the animated sliver.
+        let openingColumn: (id: StripColumnID, fullWidth: CGFloat)?
         let isWorkspaceInputActive: Bool
         let isWorkspaceVisible: Bool
         let buildContent: (StripColumn, Bool, Bool) -> AnyView
@@ -201,6 +205,7 @@ final class StripCanvasViewController: NSViewController {
         overviewLiveColumnIDs: Set<StripColumnID>,
         isColumnFullscreen: Bool,
         isAnimatingScroll: Bool,
+        openingColumn: (id: StripColumnID, fullWidth: CGFloat)?,
         isWorkspaceInputActive: Bool,
         isWorkspaceVisible: Bool,
         buildContent: @escaping (StripColumn, Bool, Bool) -> AnyView,
@@ -213,6 +218,7 @@ final class StripCanvasViewController: NSViewController {
             overviewLiveColumnIDs: overviewLiveColumnIDs,
             isColumnFullscreen: isColumnFullscreen,
             isAnimatingScroll: isAnimatingScroll,
+            openingColumn: openingColumn,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
             buildContent: buildContent,
@@ -255,9 +261,14 @@ final class StripCanvasViewController: NSViewController {
             guard frames.indices.contains(index) else { continue }
             let isFocused = index == layout.focusedColumnIndex
             let insetFrame = frames[index].frame.offsetBy(dx: peek, dy: 0)
+            // The column growing in via the niri open animation keeps its portal at its FULL width even
+            // though its on-screen slot (driven by the model's animated width) is still a sliver — so
+            // the terminal grid never reflows down and back up (no SIGWINCH storm on a fresh shell).
+            let isOpening = inputs.openingColumn?.id == column.id
+            let renderWidth = isOpening ? (inputs.openingColumn?.fullWidth ?? column.width) : column.width
             // A full-size frame parked entirely off-screen: the portal keeps its size (never reflows).
-            let parked = CGRect(x: -(canvasW + column.width + 200), y: 0,
-                                width: column.width, height: canvasSize.height)
+            let parked = CGRect(x: -(canvasW + renderWidth + 200), y: 0,
+                                width: renderWidth, height: canvasSize.height)
             let intersectsCanvas = insetFrame.maxX > 0 && insetFrame.minX < canvasW
             let fullyInLive = insetFrame.minX >= peek - 0.5 && insetFrame.maxX <= canvasW - peek + 0.5
             // "Near" = within one column of the canvas. Near columns render continuously (parked when
@@ -285,7 +296,11 @@ final class StripCanvasViewController: NSViewController {
             } else if isAnimating {
                 portalFrame = parked
                 shouldRender = true // keep every column warm (see below); mirror only the visible ones
-                if near, intersectsCanvas { mirror = insetFrame }
+                // The opening column shows NO mirror while it grows: its growing slot reveals the dark
+                // canvas (matching an empty new terminal), and its live portal — parked at full width,
+                // never reflowed — snaps on-screen when the grow settles. Mirroring it instead would
+                // squash the full-width surface into the sliver (or show black before its first frame).
+                if !isOpening, near, intersectsCanvas { mirror = insetFrame }
             } else if fullyInLive {
                 portalFrame = insetFrame // settled & fully visible -> real on-screen portal
                 shouldRender = true

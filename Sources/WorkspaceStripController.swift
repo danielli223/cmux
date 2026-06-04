@@ -148,6 +148,47 @@ final class WorkspaceStripController: ObservableObject {
         }
     )
 
+    /// The column currently growing in via ``openColumn()``'s niri width-grow animation, plus its
+    /// full (target) width. The canvas reads this through ``openingColumnSnapshot`` to keep the
+    /// growing column's terminal portal parked at full width — never reflowed to the animated sliver
+    /// — while the slot opens and the neighbours slide aside. `nil` when no open is in flight.
+    private struct OpenColumnTarget {
+        let columnID: StripColumnID
+        let startWidth: CGFloat
+        let fullWidth: CGFloat
+        let fromOffset: CGFloat
+        let toOffset: CGFloat
+    }
+
+    /// In-flight open-column animation, or `nil`. Not `@Published`; the per-step ``layout`` mutation
+    /// (also published) is what re-runs the canvas reconcile, which reads ``openingColumnSnapshot``.
+    private var openTarget: OpenColumnTarget?
+
+    /// The id and full width of the column currently growing in, for the canvas to keep its portal
+    /// parked at full width (no grid reflow) while only the on-screen slot animates. `nil` when idle.
+    var openingColumnSnapshot: (id: StripColumnID, fullWidth: CGFloat)? {
+        openTarget.map { (id: $0.columnID, fullWidth: $0.fullWidth) }
+    }
+
+    /// Drives the niri "open a column" grow: steps a single `0...1` progress along the same ease-out
+    /// curve as the nav glide, interpolating the new column's width (sliver → full) and the scroll
+    /// offset together so the slot opens while the viewport pans to it. Snaps to the final state on
+    /// finish.
+    private lazy var openAnimator = StripScrollAnimator(
+        onStep: { [weak self] progress in
+            guard let self, let target = self.openTarget else { return }
+            let width = target.startWidth + (target.fullWidth - target.startWidth) * progress
+            let offset = target.fromOffset + (target.toOffset - target.fromOffset) * progress
+            self.layout.setAnimatedColumnWidth(width, forID: target.columnID, viewportWidth: self.viewportWidth)
+            self.layout.setScrollOffset(offset, viewportWidth: self.viewportWidth)
+        },
+        onFinished: { [weak self] in
+            guard let self else { return }
+            self.finalizeOpen()
+            self.isAnimatingScroll = false
+        }
+    )
+
     /// Whether the user has asked macOS to minimize motion; when true, viewport changes jump.
     private var prefersReducedMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -167,10 +208,49 @@ final class WorkspaceStripController: ObservableObject {
         scrollAnimator.animate(from: from, to: to)
     }
 
+    /// Animates a freshly inserted column growing from a thin sliver to its full width while the
+    /// viewport pans to reveal it — niri's "open a new window" motion. The model has already been
+    /// mutated to the *final* state (full width, resting offset) by ``openColumn()``; this rewinds
+    /// the new column to a sliver and the offset to `fromOffset`, then glides both forward together.
+    /// A no-op under reduce-motion: the model is left at its final state, so the column simply appears.
+    /// - Parameters:
+    ///   - columnID: The just-inserted column to grow.
+    ///   - fullWidth: The column's intrinsic (target) width.
+    ///   - fromOffset: The scroll offset captured before insertion.
+    ///   - toOffset: The resting scroll offset the model jumped to on insertion.
+    private func animateColumnOpen(
+        columnID: StripColumnID, fullWidth: CGFloat, fromOffset: CGFloat, toOffset: CGFloat
+    ) {
+        guard !prefersReducedMotion else { return } // model already at full width + toOffset
+        let startWidth = max(2, (fullWidth * 0.06).rounded())
+        openTarget = OpenColumnTarget(
+            columnID: columnID, startWidth: startWidth,
+            fullWidth: fullWidth, fromOffset: fromOffset, toOffset: toOffset
+        )
+        // Rewind to the start state in one synchronous step so the first rendered frame is the sliver,
+        // never a full-width flash (both mutations coalesce into a single SwiftUI update this turn).
+        layout.setAnimatedColumnWidth(startWidth, forID: columnID, viewportWidth: viewportWidth)
+        layout.setScrollOffset(fromOffset, viewportWidth: viewportWidth)
+        isAnimatingScroll = true
+        openAnimator.animate(from: 0, to: 1)
+    }
+
+    /// Snaps a growing column to its full width and resting offset and clears the open-animation
+    /// state. Called when the grow completes and by any transition (nav glide, resize, overview) that
+    /// must take over a half-grown column rather than fight it. A no-op when no open is in flight.
+    private func finalizeOpen() {
+        guard let target = openTarget else { return }
+        openAnimator.cancel()
+        layout.setAnimatedColumnWidth(target.fullWidth, forID: target.columnID, viewportWidth: viewportWidth)
+        layout.setScrollOffset(target.toOffset, viewportWidth: viewportWidth)
+        openTarget = nil
+    }
+
     /// Stops any in-flight glide immediately and restores the live terminals. Used by transitions
     /// (overview, mode toggle, viewport resize) that must not be fought by a stale animation.
     private func stopGlide() {
         scrollAnimator.cancel()
+        finalizeOpen()
         if isAnimatingScroll { isAnimatingScroll = false }
     }
 
@@ -254,6 +334,7 @@ final class WorkspaceStripController: ObservableObject {
     func openColumn() -> UUID? {
         guard mode == .strip, let bridge else { return nil }
         clearColumnFullscreen()
+        stopGlide() // finalize any in-flight open / cancel a nav glide before computing the new target
         let afterPanel = layout.focusedColumn?.focusedWindow?.raw
         guard let newPanelID = bridge.stripCreateColumnTerminal(after: afterPanel) else { return nil }
         let column = StripColumn(
@@ -262,9 +343,11 @@ final class WorkspaceStripController: ObservableObject {
             windows: [StripWindowID(newPanelID)]
         )
         let from = layout.scrollOffset
-        layout.insertColumn(column, viewportWidth: viewportWidth)
+        layout.insertColumn(column, viewportWidth: viewportWidth) // inserts at full width + reveals
         bridge.stripFocusPanel(newPanelID)
-        animateViewport(from: from)
+        // Grow the new column from a sliver to full width while panning from `from` to the offset the
+        // insert just jumped to, so the slot opens and the neighbours slide aside (niri "open window").
+        animateColumnOpen(columnID: column.id, fullWidth: column.width, fromOffset: from, toOffset: layout.scrollOffset)
         return newPanelID
     }
 
@@ -289,6 +372,7 @@ final class WorkspaceStripController: ObservableObject {
               var column = layout.focusedColumn,
               let panelID = column.focusedWindow?.raw else { return }
         clearColumnFullscreen()
+        finalizeOpen() // settle a half-grown column before this close recomputes the glide
         let from = layout.scrollOffset
         bridge.stripClosePanel(panelID)
         if column.windows.count <= 1 {
@@ -363,6 +447,7 @@ final class WorkspaceStripController: ObservableObject {
     func focusColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
         clearColumnFullscreen()
+        finalizeOpen() // settle a half-grown column before this nav recomputes the glide
         snapshotVisibleColumns() // cache the columns we're leaving while they still have pixels
         let from = layout.scrollOffset
         if layout.focusColumn(direction, viewportWidth: viewportWidth) {
@@ -384,6 +469,7 @@ final class WorkspaceStripController: ObservableObject {
     func moveColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
         clearColumnFullscreen()
+        finalizeOpen() // settle a half-grown column before this move recomputes the glide
         snapshotVisibleColumns()
         let from = layout.scrollOffset
         if layout.moveColumn(direction, viewportWidth: viewportWidth) {

@@ -412,6 +412,27 @@ public struct StripLayout: Equatable, Sendable, Codable {
         clampScroll(viewportWidth: viewportWidth)
     }
 
+    /// Sets a column's intrinsic width by id during an open/grow animation, allowing widths below
+    /// the normal ``setColumnWidth(_:at:viewportWidth:)`` minimum so a freshly opened column can
+    /// grow from a thin sliver up to its full width. Re-clamps the scroll offset to the new content
+    /// width.
+    ///
+    /// Unlike ``setColumnWidth(_:at:viewportWidth:)`` (an explicit user resize, floored at 80pt),
+    /// this is the per-frame mutation behind the niri-style "open a column" animation: the column is
+    /// inserted at its full width, then stepped from a sliver back up to it so the neighbours slide
+    /// aside as the slot opens. Floored at `0` so the first frame is a true sliver, not an 80pt jump.
+    /// - Parameters:
+    ///   - width: The column's current animated width in points (clamped to `>= 0`).
+    ///   - id: The id of the column to resize. A no-op if no column has that id.
+    ///   - viewportWidth: Current viewport width, used to re-clamp the scroll offset.
+    public mutating func setAnimatedColumnWidth(
+        _ width: CGFloat, forID id: StripColumnID, viewportWidth: CGFloat
+    ) {
+        guard let index = columns.firstIndex(where: { $0.id == id }) else { return }
+        columns[index].width = max(0, width)
+        clampScroll(viewportWidth: viewportWidth)
+    }
+
     /// Sets the focused column by index and pans it just into view (no pan if it is already fully
     /// visible; otherwise the minimum column-snapped scroll — see ``revealFocusedColumn``). Used
     /// when selecting a column from the overview. The index is clamped into range.
