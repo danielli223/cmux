@@ -75,8 +75,9 @@ struct StripWorkspaceView: View {
             scrollOffset: stripController.overviewScrollOffset
         )
         ZStack(alignment: .topLeading) {
-            // Near-opaque so any briefly-lingering live terminal portal can't show through.
-            Color(red: 0.10, green: 0.11, blue: 0.13).opacity(0.97)
+            // Fully opaque: a solid backdrop so no terminal content (or a briefly-lingering canvas
+            // mirror) can bleed through behind the overview tiles.
+            Color(red: 0.11, green: 0.12, blue: 0.14)
                 .contentShape(Rectangle())
                 .onTapGesture { stripController.cancelOverview() }
             ForEach(Array(frames.enumerated()), id: \.element.id) { entry in

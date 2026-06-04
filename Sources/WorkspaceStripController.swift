@@ -224,6 +224,7 @@ final class WorkspaceStripController: ObservableObject {
             layout.revealFocusedColumnForViewport(viewportWidth)
         }
         mode = .strip
+        startMirrorRefresh() // pump runs the whole strip session so peek/motion mirrors stay live
     }
 
     /// Disables niri-mode and returns to Bonsplit tiling. The strip model is retained (so
@@ -231,6 +232,9 @@ final class WorkspaceStripController: ObservableObject {
     func disableStripMode() {
         guard mode != .tiling else { return }
         stopGlide()
+        stopMirrorRefresh()
+        overviewFrozenImages = [:]
+        overviewLiveColumnIDs = []
         isOverviewActive = false
         isColumnFullscreen = false
         mode = .tiling
@@ -417,11 +421,6 @@ final class WorkspaceStripController: ObservableObject {
         snapshotVisibleColumns(force: true)         // freshen the cache for columns rendering now
         captureOverviewThumbnails()                 // text fallback when a column has no cached frame
         overviewFrozenImages = snapshotCache        // off-screen tiles show their last on-screen color
-#if DEBUG
-        let offscreen = layout.columns.filter { !visibleIDs.contains($0.id) }
-        let withSnap = offscreen.filter { col in col.windows.contains { snapshotCache[$0.raw] != nil } }.count
-        cmuxDebugLog("niri.overview.open cols=\(layout.columns.count) visible=\(visibleIDs.count) cached=\(snapshotCache.count) offscreenWithSnapshot=\(withSnap)/\(offscreen.count)")
-#endif
 
         isOverviewActive = true
         startMirrorRefresh()
@@ -466,6 +465,7 @@ final class WorkspaceStripController: ObservableObject {
     /// per-surface frame notifications (marking the matching tile dirty), and drains the throttle
     /// on a repeating timer so live tiles refresh at ~12fps regardless of terminal output rate.
     private func startMirrorRefresh() {
+        guard refreshTimer == nil else { return } // idempotent: one pump for the whole strip session
         renderFrameToken = GhosttyNSView.retainRenderedFrameNotifications()
         refreshThrottle = FrameRefreshThrottle(interval: 1.0 / 12.0, startTime: CACurrentMediaTime())
         frameObserver = NotificationCenter.default.addObserver(
@@ -488,7 +488,8 @@ final class WorkspaceStripController: ObservableObject {
         refreshTimer = timer
     }
 
-    /// Stops the live-mirror pump and clears all overview render state. Idempotent.
+    /// Stops the live-mirror pump. Does not touch overview render state — the pump runs the whole
+    /// strip session (for peek/motion mirrors), so it stops only on leaving strip mode. Idempotent.
     private func stopMirrorRefresh() {
         if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
         frameObserver = nil
@@ -497,8 +498,6 @@ final class WorkspaceStripController: ObservableObject {
         renderFrameToken?()
         renderFrameToken = nil
         pendingMirrorRefresh = []
-        overviewFrozenImages = [:]
-        overviewLiveColumnIDs = []
     }
 
     /// Cancels the overview without changing the selection, restoring the exact viewport
@@ -509,7 +508,8 @@ final class WorkspaceStripController: ObservableObject {
         overviewThumbnails = [:]
         overviewAnimator.cancel()
         overviewScrollOffset = 0
-        stopMirrorRefresh()
+        overviewFrozenImages = [:]
+        overviewLiveColumnIDs = [] // pump keeps running for peek/motion mirrors
         layout.restoreViewport(
             focusedColumnIndex: savedFocusBeforeOverview,
             scrollOffset: savedOffsetBeforeOverview
@@ -550,7 +550,8 @@ final class WorkspaceStripController: ObservableObject {
         overviewThumbnails = [:]
         overviewAnimator.cancel()
         overviewScrollOffset = 0
-        stopMirrorRefresh()
+        overviewFrozenImages = [:]
+        overviewLiveColumnIDs = [] // pump keeps running for peek/motion mirrors
         layout.setFocusedColumn(target, viewportWidth: viewportWidth)
         if let panelID = layout.focusedColumn?.focusedWindow?.raw {
             bridge?.stripFocusPanel(panelID)
@@ -587,6 +588,7 @@ final class WorkspaceStripController: ObservableObject {
         layout = StripLayout(columns: columns, focusedColumnIndex: focusedColumnIndex, gap: layout.gap)
         layout.revealFocusedColumnForViewport(viewportWidth)
         mode = .strip
+        startMirrorRefresh() // pump runs the whole strip session so peek/motion mirrors stay live
     }
 
     /// The persisted strip structure for a session snapshot: each column's window panel ids in
