@@ -164,6 +164,64 @@ public struct StripLayout: Equatable, Sendable, Codable {
         return frames
     }
 
+    /// The total scrollable content width of the readable, horizontally-scrolling overview (the one
+    /// that shows a handful of legible tiles and scrolls, rather than cramming the whole strip to
+    /// fit). Used to clamp the overview's own scroll offset.
+    /// - Parameters:
+    ///   - contentSize: The content-area size.
+    ///   - visibleColumns: How many tiles are shown across at once.
+    ///   - tileGap: Horizontal gap between tiles, in points.
+    /// - Returns: The full width of all tiles laid end to end.
+    public func overviewStripContentWidth(
+        in contentSize: CGSize, visibleColumns: Int, tileGap: CGFloat = 16
+    ) -> CGFloat {
+        guard !columns.isEmpty else { return 0 }
+        let n = max(1, visibleColumns)
+        let tileWidth = (contentSize.width - tileGap * CGFloat(n + 1)) / CGFloat(n)
+        return tileGap + CGFloat(columns.count) * (tileWidth + tileGap)
+    }
+
+    /// Resolves overview tiles for the **readable, scrollable** overview: a fixed number of legible
+    /// tiles shown across at once, laid out left to right at a constant size and panned by
+    /// `scrollOffset`. This makes the overview a zoomed-out *scroll of the same strip* (you scroll to
+    /// reach more columns) instead of a fit-everything grid that turns tiny when there are many
+    /// columns.
+    ///
+    /// Tiles keep the focused column's aspect ratio (width ÷ full content height), capped so they fit
+    /// vertically, and are centered vertically. Frames live in content-area coordinates, exactly like
+    /// ``columnFrames(in:)``.
+    /// - Parameters:
+    ///   - contentSize: The content-area size (window minus sidebar).
+    ///   - visibleColumns: How many tiles to show across at once (e.g. `4`).
+    ///   - scrollOffset: Horizontal pan of the tile row, in tile-strip coordinates.
+    ///   - tileGap: Gap between tiles, in points.
+    /// - Returns: One ``StripColumnFrame`` per column, in strip order; visible when on-screen.
+    public func overviewStripFrames(
+        in contentSize: CGSize,
+        visibleColumns: Int,
+        scrollOffset: CGFloat,
+        tileGap: CGFloat = 16
+    ) -> [StripColumnFrame] {
+        guard !columns.isEmpty, contentSize.width > 0, contentSize.height > 0 else { return [] }
+        let n = max(1, visibleColumns)
+        let tileWidth = (contentSize.width - tileGap * CGFloat(n + 1)) / CGFloat(n)
+        let referenceColumnWidth = columns[min(max(focusedColumnIndex, 0), columns.count - 1)].width
+        let aspectWidthOverHeight = max(0.01, referenceColumnWidth / contentSize.height)
+        var tileHeight = tileWidth / aspectWidthOverHeight
+        let maxTileHeight = contentSize.height * 0.82
+        if tileHeight > maxTileHeight { tileHeight = maxTileHeight }
+        let originY = (contentSize.height - tileHeight) / 2
+        var frames: [StripColumnFrame] = []
+        frames.reserveCapacity(columns.count)
+        for (index, column) in columns.enumerated() {
+            let x = tileGap + CGFloat(index) * (tileWidth + tileGap) - scrollOffset
+            let rect = CGRect(x: x, y: originY, width: tileWidth, height: tileHeight)
+            let isVisible = rect.maxX > 0 && rect.minX < contentSize.width
+            frames.append(StripColumnFrame(id: column.id, frame: rect, isVisible: isVisible))
+        }
+        return frames
+    }
+
     // MARK: - Focus accessors
 
     /// The focused column, or `nil` when the strip is empty.

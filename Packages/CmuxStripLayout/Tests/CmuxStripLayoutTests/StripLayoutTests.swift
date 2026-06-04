@@ -35,6 +35,30 @@ import Testing
         )
     }
 
+    // MARK: - Scrollable overview frames
+
+    @Test func overviewStripShowsFixedTileCountAndScrolls() {
+        let strip = StripLayout(columns: (1...8).map { column($0, width: 640) }, focusedColumnIndex: 0)
+        let size = CGSize(width: 1200, height: 800)
+        let frames0 = strip.overviewStripFrames(in: size, visibleColumns: 4, scrollOffset: 0)
+        #expect(frames0.count == 8)
+        // First tile starts near the left margin; tiles are uniformly sized and ordered.
+        #expect(frames0[0].frame.minX > 0)
+        #expect(frames0[1].frame.minX > frames0[0].frame.minX)
+        let w0 = frames0[0].frame.width
+        #expect(frames0.allSatisfy { abs($0.frame.width - w0) < 0.001 })
+        // Scrolling right pans every tile left by the same amount.
+        let frames1 = strip.overviewStripFrames(in: size, visibleColumns: 4, scrollOffset: 300)
+        #expect(abs((frames0[0].frame.minX - frames1[0].frame.minX) - 300) < 0.001)
+    }
+
+    @Test func overviewStripContentWidthExceedsViewportWhenManyColumns() {
+        let strip = StripLayout(columns: (1...10).map { column($0) }, focusedColumnIndex: 0)
+        let size = CGSize(width: 1200, height: 800)
+        let total = strip.overviewStripContentWidth(in: size, visibleColumns: 4)
+        #expect(total > size.width) // 10 columns, 4 visible -> scrollable
+    }
+
     // MARK: - Invariant 1: opening a column doesn't change prior columns' widths
 
     @Test func insertColumnPreservesSiblingWidths() {

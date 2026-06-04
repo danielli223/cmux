@@ -1,3 +1,4 @@
+import AppKit
 import CmuxStripLayout
 import CoreGraphics
 import Foundation
@@ -25,9 +26,20 @@ final class WorkspaceStripController: ObservableObject {
     /// The bridge to panel lifecycle/focus. Weak to avoid a retain cycle with ``Workspace``.
     weak var bridge: StripPanelBridge?
 
-    /// The last viewport width reported by the view, used by pure model ops that pan/clamp.
+    /// The width (points) of a peeking sliver shown on each side of the strip: a snapshot of the
+    /// adjacent column so the layout always reveals "there is more over here," the niri spatial cue.
+    /// The live columns are inset by this on each side; the slivers fill the margins.
+    static let columnPeekWidth: CGFloat = 44
+
+    /// The **effective** viewport width the pure model lays columns out in: the actual content width
+    /// minus a ``columnPeekWidth`` margin on each side. Two live columns fill this inset region, and
+    /// the peek slivers occupy the margins. Pure model ops that pan/clamp use this.
     /// Seeded with a reasonable default so socket-driven ops before first layout still work.
-    private(set) var viewportWidth: CGFloat = 1200
+    private(set) var viewportWidth: CGFloat = 1200 - 2 * columnPeekWidth
+
+    /// The full content-area width (no peek inset). Used for the overview's own horizontal scroll,
+    /// which spans the whole width.
+    private(set) var actualViewportWidth: CGFloat = 1200
 
     /// The intrinsic width assigned to columns: **half the content area minus the inter-column
     /// gap**, derived from the live viewport so exactly two columns + the gap fill the screen
@@ -52,6 +64,19 @@ final class WorkspaceStripController: ObservableObject {
 
     /// The column the overview highlight is on. Becomes the focused column when selected.
     @Published private(set) var overviewSelectionIndex = 0
+
+    /// How many tiles the readable, scrollable overview shows across at once.
+    let overviewVisibleColumns = 4
+
+    /// Horizontal scroll offset (points) of the overview's tile strip. The overview shows a few
+    /// readable tiles and scrolls — the selection glides this to keep itself centred — rather than
+    /// cramming every column to fit.
+    @Published private(set) var overviewScrollOffset: CGFloat = 0
+
+    /// Glides ``overviewScrollOffset`` so moving the overview highlight scrolls the tiles smoothly.
+    private lazy var overviewAnimator = StripScrollAnimator(
+        onStep: { [weak self] value in self?.overviewScrollOffset = value }
+    )
 
     /// Per-column text thumbnails captured when the overview opens, keyed by ``StripColumnID``.
     /// Each value is one viewport-text snapshot **per stacked window** in the column (top to
@@ -91,6 +116,64 @@ final class WorkspaceStripController: ObservableObject {
     private var savedFocusBeforeOverview = 0
     private var savedOffsetBeforeOverview: CGFloat = 0
 
+    /// Color snapshots of columns captured **while they were on-screen** (and therefore rendering),
+    /// keyed by panel id. Because a terminal stops rendering once it scrolls off-screen (its surface
+    /// goes to 0×0, with no IOSurface to mirror or freeze), the overview cannot snapshot an
+    /// off-screen column on demand. Instead we cache each column's last on-screen frame here, refresh
+    /// it as the user navigates past, and show it in the overview tile when the column is off-screen.
+    private var snapshotCache: [UUID: CGImage] = [:]
+
+    /// Timestamp of the last ``snapshotVisibleColumns(force:)`` so rapid (held-key) navigation does
+    /// not run an image conversion on every keystroke.
+    private var lastSnapshotTime: CFTimeInterval = 0
+
+    // MARK: - Animated reveal (smooth keyboard navigation)
+
+    /// True while a navigation glide is in flight. The canvas hides the live terminal portals and
+    /// shows solid panels during the glide, so the moving columns cannot smear (the GPU portal
+    /// re-reads its frame a runloop tick late, flashing the old position). Live content snaps back
+    /// when the glide settles.
+    @Published private(set) var isAnimatingScroll = false
+
+    /// Animates the strip's ``StripLayout/scrollOffset`` so a focus or structural change glides the
+    /// viewport instead of teleporting — the "scrolling window manager" feel. Steps the offset only;
+    /// the canvas repositions its columns from it through the normal reconcile path.
+    private lazy var scrollAnimator = StripScrollAnimator(
+        onStep: { [weak self] offset in
+            guard let self else { return }
+            self.layout.setScrollOffset(offset, viewportWidth: self.viewportWidth)
+        },
+        onFinished: { [weak self] in
+            self?.isAnimatingScroll = false
+        }
+    )
+
+    /// Whether the user has asked macOS to minimize motion; when true, viewport changes jump.
+    private var prefersReducedMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// Glides the viewport from `from` to the offset the model **just** jumped to. Call immediately
+    /// after a layout mutation that changed ``StripLayout/scrollOffset``, passing the offset captured
+    /// *before* the mutation. A no-op when the offset did not move or when reduce-motion is on (the
+    /// model already sits at the destination).
+    /// - Parameter from: The scroll offset captured before the mutation.
+    private func animateViewport(from: CGFloat) {
+        let to = layout.scrollOffset
+        guard from != to else { return }
+        guard !prefersReducedMotion else { return }
+        layout.setScrollOffset(from, viewportWidth: viewportWidth) // rewind, then glide to `to`
+        isAnimatingScroll = true
+        scrollAnimator.animate(from: from, to: to)
+    }
+
+    /// Stops any in-flight glide immediately and restores the live terminals. Used by transitions
+    /// (overview, mode toggle, viewport resize) that must not be fought by a stale animation.
+    private func stopGlide() {
+        scrollAnimator.cancel()
+        if isAnimatingScroll { isAnimatingScroll = false }
+    }
+
     // MARK: - Viewport
 
     /// Records the current viewport width (from the rendering `GeometryReader`) and re-clamps
@@ -98,16 +181,19 @@ final class WorkspaceStripController: ObservableObject {
     /// - Parameter width: The viewport width in points.
     func setViewportWidth(_ width: CGFloat) {
         guard width > 0 else { return }
+        let effective = max(1, width - 2 * Self.columnPeekWidth)
         let old = viewportWidth
-        guard width != old else { return }
-        viewportWidth = width
-        // Columns track the content area: recompute every column to the new half-width so two
-        // exactly fill the screen across window/sidebar resizes, then re-pan the focused column.
+        guard effective != old else { actualViewportWidth = width; return }
+        stopGlide() // a width change re-pans; a stale glide would fight it
+        actualViewportWidth = width
+        viewportWidth = effective
+        // Columns track the inset content area: recompute every column to the new half-width so two
+        // fill the inset region (peek slivers in the margins), then re-pan the focused column.
         if old > 0, isStripMode {
             layout.setAllColumnWidths(newColumnWidth)
-            layout.revealFocusedColumnForViewport(width)
+            layout.revealFocusedColumnForViewport(effective)
         } else {
-            layout.setScrollOffset(layout.scrollOffset, viewportWidth: width)
+            layout.setScrollOffset(layout.scrollOffset, viewportWidth: effective)
         }
     }
 
@@ -144,6 +230,7 @@ final class WorkspaceStripController: ObservableObject {
     /// re-enabling restores column order) but no longer drives rendering.
     func disableStripMode() {
         guard mode != .tiling else { return }
+        stopGlide()
         isOverviewActive = false
         isColumnFullscreen = false
         mode = .tiling
@@ -170,8 +257,10 @@ final class WorkspaceStripController: ObservableObject {
             width: newColumnWidth,
             windows: [StripWindowID(newPanelID)]
         )
+        let from = layout.scrollOffset
         layout.insertColumn(column, viewportWidth: viewportWidth)
         bridge.stripFocusPanel(newPanelID)
+        animateViewport(from: from)
         return newPanelID
     }
 
@@ -196,6 +285,7 @@ final class WorkspaceStripController: ObservableObject {
               var column = layout.focusedColumn,
               let panelID = column.focusedWindow?.raw else { return }
         clearColumnFullscreen()
+        let from = layout.scrollOffset
         bridge.stripClosePanel(panelID)
         if column.windows.count <= 1 {
             layout.removeFocusedColumn(viewportWidth: viewportWidth)
@@ -209,6 +299,7 @@ final class WorkspaceStripController: ObservableObject {
         if let nextPanel = layout.focusedColumn?.focusedWindow?.raw {
             bridge.stripFocusPanel(nextPanel)
         }
+        animateViewport(from: from)
     }
 
     // MARK: - Fullscreen (zoom a column)
@@ -233,12 +324,46 @@ final class WorkspaceStripController: ObservableObject {
 
     // MARK: - Focus & movement
 
-    /// Moves column focus left/right, pans to reveal, and focuses the landing panel.
+    /// Captures color snapshots of the columns currently on-screen (and rendering) into
+    /// ``snapshotCache``, so the overview can show their color later when they are off-screen and no
+    /// longer rendering. Throttled to ~0.4s so held-key navigation does not convert an image on every
+    /// keystroke; pass `force` to bypass the throttle (e.g. when the overview is about to open).
+    /// - Parameter force: When true, snapshot immediately regardless of the throttle.
+    private func snapshotVisibleColumns(force: Bool = false) {
+        guard mode == .strip, let bridge else { return }
+        let now = CACurrentMediaTime()
+        guard force || now - lastSnapshotTime > 0.4 else { return }
+        lastSnapshotTime = now
+        let viewport = CGRect(x: 0, y: 0, width: viewportWidth, height: 1)
+        let visible = Set(layout.columnFrames(in: viewport).filter(\.isVisible).map(\.id))
+        for column in layout.columns where visible.contains(column.id) {
+            for window in column.windows {
+                if let image = bridge.stripCaptureThumbnailImage(for: window.raw) {
+                    snapshotCache[window.raw] = image
+                }
+            }
+        }
+    }
+
+    /// The cached on-screen color snapshot for a panel, shown in place of the live terminal while the
+    /// viewport glides (the live portal is hidden during motion so it cannot smear). The snapshot
+    /// slides perfectly with the column; live content snaps back when the glide settles.
+    /// - Parameter panelID: The panel whose last on-screen snapshot to show, if any.
+    /// - Returns: The cached image, or `nil` if the column has not been on-screen yet this session.
+    func glideSnapshot(for panelID: UUID?) -> CGImage? {
+        guard let panelID else { return nil }
+        return snapshotCache[panelID]
+    }
+
+    /// Moves column focus left/right, glides the viewport to reveal it, and focuses the landing panel.
     func focusColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
         clearColumnFullscreen()
+        snapshotVisibleColumns() // cache the columns we're leaving while they still have pixels
+        let from = layout.scrollOffset
         if layout.focusColumn(direction, viewportWidth: viewportWidth) {
             syncFocusToModel()
+            animateViewport(from: from)
         }
     }
 
@@ -251,11 +376,15 @@ final class WorkspaceStripController: ObservableObject {
         }
     }
 
-    /// Reorders the focused column left/right on the strip; widths unchanged; viewport follows.
+    /// Reorders the focused column left/right on the strip; widths unchanged; viewport glides to follow.
     func moveColumn(_ direction: StripAxisDirection) {
         guard mode == .strip else { return }
         clearColumnFullscreen()
-        layout.moveColumn(direction, viewportWidth: viewportWidth)
+        snapshotVisibleColumns()
+        let from = layout.scrollOffset
+        if layout.moveColumn(direction, viewportWidth: viewportWidth) {
+            animateViewport(from: from)
+        }
     }
 
     // MARK: - Overview (zoom-out)
@@ -271,22 +400,53 @@ final class WorkspaceStripController: ObservableObject {
     /// cancel restores them exactly. The highlight starts on the focused column.
     func enterOverview() {
         guard mode == .strip, !isOverviewActive, !layout.columns.isEmpty else { return }
+        stopGlide()
         clearColumnFullscreen()
         savedFocusBeforeOverview = layout.focusedColumnIndex
         savedOffsetBeforeOverview = layout.scrollOffset
         overviewSelectionIndex = layout.focusedColumnIndex
+        revealOverviewSelection(animated: false) // open already scrolled to the focused tile
 
         // Columns rendering now (on-screen in the pre-overview viewport) are mirrored live; the
-        // rest are frozen. `isVisible` comes from the same pure frame math the canvas uses.
+        // rest show their last cached on-screen color snapshot. `isVisible` comes from the same pure
+        // frame math the canvas uses.
         let viewport = CGRect(x: 0, y: 0, width: viewportWidth, height: 1)
         let visibleIDs = Set(layout.columnFrames(in: viewport).filter(\.isVisible).map(\.id))
         overviewLiveColumnIDs = visibleIDs
 
-        captureOverviewThumbnails()                 // text fallback (all columns)
-        captureFrozenImages(excluding: visibleIDs)  // color freeze for off-screen columns
+        snapshotVisibleColumns(force: true)         // freshen the cache for columns rendering now
+        captureOverviewThumbnails()                 // text fallback when a column has no cached frame
+        overviewFrozenImages = snapshotCache        // off-screen tiles show their last on-screen color
+#if DEBUG
+        let offscreen = layout.columns.filter { !visibleIDs.contains($0.id) }
+        let withSnap = offscreen.filter { col in col.windows.contains { snapshotCache[$0.raw] != nil } }.count
+        cmuxDebugLog("niri.overview.open cols=\(layout.columns.count) visible=\(visibleIDs.count) cached=\(snapshotCache.count) offscreenWithSnapshot=\(withSnap)/\(offscreen.count)")
+#endif
 
         isOverviewActive = true
         startMirrorRefresh()
+    }
+
+    /// Scrolls the overview's tile strip so the highlighted tile is centred (clamped to the ends).
+    /// Mirrors the live-strip glide: moving the highlight scrolls the overview, it does not jump.
+    /// - Parameter animated: Glide to the target (selection moves) or set it instantly (overview open).
+    private func revealOverviewSelection(animated: Bool) {
+        guard !layout.columns.isEmpty else { return }
+        let gap: CGFloat = 16
+        let n = CGFloat(max(1, overviewVisibleColumns))
+        let tileWidth = (actualViewportWidth - gap * (n + 1)) / n
+        let stride = tileWidth + gap
+        let selectedX = gap + CGFloat(overviewSelectionIndex) * stride
+        let centered = selectedX - (actualViewportWidth - tileWidth) / 2
+        let total = gap + CGFloat(layout.columns.count) * stride
+        let maxScroll = max(0, total - actualViewportWidth)
+        let target = min(max(centered, 0), maxScroll)
+        if animated {
+            overviewAnimator.animate(from: overviewScrollOffset, to: target)
+        } else {
+            overviewAnimator.cancel()
+            overviewScrollOffset = target
+        }
     }
 
     /// Snapshots every stacked window's terminal text per column, for the overview tiles.
@@ -300,22 +460,6 @@ final class WorkspaceStripController: ObservableObject {
             }
         }
         overviewThumbnails = thumbnails
-    }
-
-    /// Captures a one-time color snapshot for every window in a column NOT in `live` (off-screen,
-    /// not rendering), so those tiles freeze in color instead of falling back to text.
-    /// - Parameter live: The column ids that will be mirrored live (and so need no frozen image).
-    private func captureFrozenImages(excluding live: Set<StripColumnID>) {
-        guard let bridge else { return }
-        var images: [UUID: CGImage] = [:]
-        for column in layout.columns where !live.contains(column.id) {
-            for window in column.windows {
-                if let image = bridge.stripCaptureThumbnailImage(for: window.raw) {
-                    images[window.raw] = image
-                }
-            }
-        }
-        overviewFrozenImages = images
     }
 
     /// Starts the live-mirror pump: retains the rendered-frame notification demand, observes
@@ -363,6 +507,8 @@ final class WorkspaceStripController: ObservableObject {
         guard isOverviewActive else { return }
         isOverviewActive = false
         overviewThumbnails = [:]
+        overviewAnimator.cancel()
+        overviewScrollOffset = 0
         stopMirrorRefresh()
         layout.restoreViewport(
             focusedColumnIndex: savedFocusBeforeOverview,
@@ -385,12 +531,14 @@ final class WorkspaceStripController: ObservableObject {
         case .up, .down:
             break
         }
+        revealOverviewSelection(animated: true) // glide the overview to follow the highlight
     }
 
     /// Sets the overview highlight to a specific column (e.g. a click).
     func setOverviewSelection(_ index: Int) {
         guard isOverviewActive, layout.columns.indices.contains(index) else { return }
         overviewSelectionIndex = index
+        revealOverviewSelection(animated: true)
     }
 
     /// Selects the highlighted column: makes it the focused column, closes the overview, and
@@ -400,6 +548,8 @@ final class WorkspaceStripController: ObservableObject {
         let target = overviewSelectionIndex
         isOverviewActive = false
         overviewThumbnails = [:]
+        overviewAnimator.cancel()
+        overviewScrollOffset = 0
         stopMirrorRefresh()
         layout.setFocusedColumn(target, viewportWidth: viewportWidth)
         if let panelID = layout.focusedColumn?.focusedWindow?.raw {
@@ -415,6 +565,7 @@ final class WorkspaceStripController: ObservableObject {
     /// - Parameter panelID: The panel that no longer exists.
     func handlePanelRemoved(_ panelID: UUID) {
         guard mode == .strip else { return }
+        snapshotCache.removeValue(forKey: panelID)
         layout.removeWindow(StripWindowID(panelID), viewportWidth: viewportWidth)
     }
 

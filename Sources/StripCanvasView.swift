@@ -29,20 +29,28 @@ struct StripCanvasView: NSViewControllerRepresentable {
             isOverviewActive: stripController.isOverviewActive,
             overviewLiveColumnIDs: stripController.overviewLiveColumnIDs,
             isColumnFullscreen: stripController.isColumnFullscreen,
+            isAnimatingScroll: stripController.isAnimatingScroll,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
-            buildContent: { column, isColumnFocused in
-                AnyView(self.columnContent(column: column, isColumnFocused: isColumnFocused))
+            buildContent: { column, isColumnFocused, isPeek in
+                AnyView(self.columnContent(column: column, isColumnFocused: isColumnFocused, isPeek: isPeek))
             }
         )
     }
 
     /// Builds one column's hosted SwiftUI: the **focused** window only (tabbed column), at full
     /// column height, with a tab indicator when the column stacks more than one window.
+    /// - Parameter isPeek: When true, this column is only partially on-screen (a peeking sliver); it
+    ///   renders its cached snapshot rather than the live terminal, since a partially-visible live
+    ///   terminal would reflow to the sliver width.
     @ViewBuilder
-    private func columnContent(column: StripColumn, isColumnFocused: Bool) -> some View {
+    private func columnContent(column: StripColumn, isColumnFocused: Bool, isPeek: Bool) -> some View {
         ZStack(alignment: .top) {
-            if let panelID = column.focusedWindow?.raw,
+            // A peek sliver mounts NO PanelContentView (hence no live portal): a partially-visible
+            // portal sizes its terminal surface to the sliver and reflows the grid (the "smushed"
+            // edge), rendering over the snapshot. Peeks show only the snapshot (below).
+            if !isPeek,
+               let panelID = column.focusedWindow?.raw,
                let panel = workspace.panels[panelID],
                let paneId = workspace.stripPaneId(forPanel: panelID) {
                 PanelContentView(
@@ -60,11 +68,17 @@ struct StripCanvasView: NSViewControllerRepresentable {
                     isVisibleInUI: isWorkspaceVisible
                         && (!stripController.isOverviewActive
                             || stripController.overviewLiveColumnIDs.contains(column.id))
-                        && (!stripController.isColumnFullscreen || isColumnFocused),
+                        && (!stripController.isColumnFullscreen || isColumnFocused)
+                        // Hidden during a navigation glide (the live portal re-reads its frame a
+                        // tick late and would smear) and for peeking slivers (a partially-visible
+                        // live terminal would reflow). A snapshot (below) stands in for both.
+                        && !stripController.isAnimatingScroll
+                        && !isPeek,
                     portalPriority: workspacePortalPriority,
                     isSplit: stripController.layout.columns.count > 1,
-                    // Dim non-focused columns clearly so the focused one is unmistakable.
-                    appearance: appearance.withStrongerUnfocusedDim(opacity: 0.55),
+                    // No unfocused dimming — all columns render at full brightness (the dark scrim
+                    // over non-focused columns was distracting).
+                    appearance: appearance.withStrongerUnfocusedDim(opacity: 0),
                     hasUnreadNotification: false,
                     terminalAgentContext: "",
                     onFocus: {
@@ -87,6 +101,20 @@ struct StripCanvasView: NSViewControllerRepresentable {
                 )
             } else {
                 Color(nsColor: GhosttyBackgroundTheme.currentColor())
+            }
+            // Stand-in snapshot shown when the live portal is hidden: during a glide (it would
+            // smear) or for a peeking sliver (it would reflow). Real terminal pixels that move with
+            // the column; live content returns when the column is settled and fully on-screen.
+            if stripController.isAnimatingScroll || isPeek {
+                if let snapshot = stripController.glideSnapshot(for: column.focusedWindow?.raw) {
+                    Image(decorative: snapshot, scale: 1)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                } else {
+                    Color(nsColor: GhosttyBackgroundTheme.currentColor())
+                }
             }
             if column.windows.count > 1 {
                 StripTabIndicator(active: column.focusedWindowIndex, count: column.windows.count)
@@ -146,9 +174,10 @@ final class StripCanvasViewController: NSViewController {
         let isOverviewActive: Bool
         let overviewLiveColumnIDs: Set<StripColumnID>
         let isColumnFullscreen: Bool
+        let isAnimatingScroll: Bool
         let isWorkspaceInputActive: Bool
         let isWorkspaceVisible: Bool
-        let buildContent: (StripColumn, Bool) -> AnyView
+        let buildContent: (StripColumn, Bool, Bool) -> AnyView
     }
 
     override func loadView() {
@@ -190,15 +219,17 @@ final class StripCanvasViewController: NSViewController {
         isOverviewActive: Bool,
         overviewLiveColumnIDs: Set<StripColumnID>,
         isColumnFullscreen: Bool,
+        isAnimatingScroll: Bool,
         isWorkspaceInputActive: Bool,
         isWorkspaceVisible: Bool,
-        buildContent: @escaping (StripColumn, Bool) -> AnyView
+        buildContent: @escaping (StripColumn, Bool, Bool) -> AnyView
     ) {
         let inputs = SyncInputs(
             layout: layout,
             isOverviewActive: isOverviewActive,
             overviewLiveColumnIDs: overviewLiveColumnIDs,
             isColumnFullscreen: isColumnFullscreen,
+            isAnimatingScroll: isAnimatingScroll,
             isWorkspaceInputActive: isWorkspaceInputActive,
             isWorkspaceVisible: isWorkspaceVisible,
             buildContent: buildContent
@@ -215,8 +246,13 @@ final class StripCanvasViewController: NSViewController {
         let isOverviewActive = inputs.isOverviewActive
         let isColumnFullscreen = inputs.isColumnFullscreen
         let buildContent = inputs.buildContent
-        let viewport = CGRect(origin: .zero, size: view.bounds.size)
-        let frames = layout.columnFrames(in: viewport)
+        // Two live columns fill an inset region; a `peek`-wide margin on each side shows snapshot
+        // slivers of the neighbours. The model lays columns out in the inset (effective) width; we
+        // render them shifted right by `peek` so the margins are free for the slivers.
+        let peek = WorkspaceStripController.columnPeekWidth
+        let canvasSize = view.bounds.size
+        let effective = CGRect(x: 0, y: 0, width: max(1, canvasSize.width - 2 * peek), height: canvasSize.height)
+        let frames = layout.columnFrames(in: effective)
         var live: Set<StripColumnID> = []
         var didReposition = false
 
@@ -233,22 +269,31 @@ final class StripCanvasViewController: NSViewController {
         for (index, column) in layout.columns.enumerated() {
             guard frames.indices.contains(index) else { continue }
             let isFocused = index == layout.focusedColumnIndex
-            // When a column is fullscreened, the focused column takes the whole viewport and the
-            // rest are parked off-screen (their portals are also hidden via `isVisibleInUI`); a
-            // strip-space x keeps them laid out but fully outside the visible canvas.
+            // The column's frame shifted into the inset region (margins reserved for peek slivers).
+            let insetFrame = frames[index].frame.offsetBy(dx: peek, dy: 0)
+            let intersectsCanvas = insetFrame.maxX > 0 && insetFrame.minX < canvasSize.width
+            // Fully inside the live region [peek, width-peek] → live terminal; partially in (extends
+            // into a margin) → a peeking sliver shown as a snapshot (a clipped live terminal would
+            // reflow). Peeks never apply during overview/fullscreen.
+            let fullyInLive = insetFrame.minX >= peek - 0.5
+                && insetFrame.maxX <= canvasSize.width - peek + 0.5
+            let isPeek = !isOverviewActive && !isColumnFullscreen && intersectsCanvas && !fullyInLive
             let frame: CGRect
-            // A full-size frame parked entirely outside the visible canvas. Used both for
-            // fullscreen's non-focused columns and for the overview's live-mirrored columns: the
-            // portal keeps rendering (the size is unchanged, so it never reflows) but sits
-            // off-screen, so it cannot bleed over the overview tiles that mirror it.
-            let parkedOffscreen = CGRect(x: -(viewport.width + column.width + 200), y: 0,
-                                         width: column.width, height: viewport.height)
+            // A full-size frame parked entirely outside the visible canvas. Used for fullscreen's
+            // non-focused columns, the overview's live-mirrored columns, and any column fully off
+            // the strip: the portal keeps its size (never reflows) but sits off-screen.
+            let parkedOffscreen = CGRect(x: -(canvasSize.width + column.width + 200), y: 0,
+                                         width: column.width, height: canvasSize.height)
             if isColumnFullscreen {
-                frame = isFocused ? viewport : parkedOffscreen
-            } else if isOverviewActive, inputs.overviewLiveColumnIDs.contains(column.id) {
+                frame = isFocused ? CGRect(origin: .zero, size: canvasSize) : parkedOffscreen
+            } else if isOverviewActive {
+                // Live-mirrored columns park off-screen (keep rendering, no bleed); the rest stay at
+                // their inset frame, occluded via `isVisibleInUI` behind the overview backdrop.
+                frame = inputs.overviewLiveColumnIDs.contains(column.id) ? parkedOffscreen : insetFrame
+            } else if !intersectsCanvas {
                 frame = parkedOffscreen
             } else {
-                frame = frames[index].frame
+                frame = insetFrame
             }
             // Rebuild the hosted SwiftUI only when content identity changes — NOT on scroll
             // (which changes only the frame). Focus / input-active / visibility are included so
@@ -264,12 +309,14 @@ final class StripCanvasViewController: NSViewController {
                 // membership in the live set must invalidate the cached content.
                 inputs.overviewLiveColumnIDs.contains(column.id) ? "L" : "-",
                 isColumnFullscreen ? "z" : "-", // toggling fullscreen flips isVisibleInUI -> rebuild
+                inputs.isAnimatingScroll ? "m" : "-", // glide hides the portal -> rebuild as a card
+                isPeek ? "p" : "-", // peek slivers render a snapshot, not the live portal
             ].joined(separator: "|")
             live.insert(column.id)
 
             if var existing = hosts[column.id] {
                 if existing.contentKey != key {
-                    existing.controller.rootView = buildContent(column, isFocused)
+                    existing.controller.rootView = buildContent(column, isFocused, isPeek)
                     existing.contentKey = key
                     hosts[column.id] = existing
                 }
@@ -283,7 +330,7 @@ final class StripCanvasViewController: NSViewController {
                 // rendered (the faint terminal "bleed" through the overview backdrop). The portal
                 // is hidden purely via `isVisibleInUI` — the same path workspace-switching uses.
             } else {
-                let controller = NSHostingController(rootView: buildContent(column, isFocused))
+                let controller = NSHostingController(rootView: buildContent(column, isFocused, isPeek))
                 addChild(controller) // AppKit handles the parent/child lifecycle (no did/willMove)
                 view.addSubview(controller.view)
                 controller.view.frame = frame

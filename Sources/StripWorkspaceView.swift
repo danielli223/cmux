@@ -69,7 +69,11 @@ struct StripWorkspaceView: View {
     /// these are tiles rather than live/snapshot terminal pixels. Clicking a tile selects it.
     @ViewBuilder
     private func overviewLayer(in size: CGSize) -> some View {
-        let frames = stripController.layout.overviewColumnFrames(in: size)
+        let frames = stripController.layout.overviewStripFrames(
+            in: size,
+            visibleColumns: stripController.overviewVisibleColumns,
+            scrollOffset: stripController.overviewScrollOffset
+        )
         ZStack(alignment: .topLeading) {
             // Near-opaque so any briefly-lingering live terminal portal can't show through.
             Color(red: 0.10, green: 0.11, blue: 0.13).opacity(0.97)
