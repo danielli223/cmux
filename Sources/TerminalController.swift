@@ -3013,6 +3013,39 @@ class TerminalController {
 	        case "new_split":
 	            return newSplit(args)
 
+        case "niri_mode":
+            return niriMode(args)
+
+        case "niri_status":
+            return niriStatus()
+
+        case "niri_open":
+            return niriAction(.open)
+
+        case "niri_open_stacked":
+            return niriAction(.openStacked)
+
+        case "niri_focus":
+            return niriFocus(args)
+
+        case "niri_move":
+            return niriMove(args)
+
+        case "niri_close":
+            return niriAction(.close)
+
+        case "niri_fullscreen":
+            return niriFullscreen(args)
+
+        case "niri_overview":
+            return niriOverview(args)
+
+        case "niri_overview_move":
+            return niriOverviewMove(args)
+
+        case "niri_overview_select":
+            return niriOverviewSelect()
+
         case "list_surfaces":
             return listSurfaces(args)
 
@@ -18439,6 +18472,163 @@ class TerminalController {
             }
         }
         return result
+    }
+
+    // MARK: - niri-style strip layout (v1 socket commands)
+
+    /// A structural niri action with no argument, dispatched by ``niriAction(_:)``.
+    private enum NiriStructuralAction { case open, openStacked, close }
+
+    /// Resolves the currently selected workspace on the main actor and runs `body` against its
+    /// strip controller, returning a socket response string.
+    private func withSelectedStripController(_ body: @MainActor (WorkspaceStripController) -> String) -> String {
+        guard let tabManager = tabManager else { return "ERROR: TabManager not available" }
+        var result = "ERROR: No selected workspace"
+        v2MainSync {
+            guard let workspace = tabManager.tabs.first(where: { $0.id == tabManager.selectedTabId }) else {
+                return
+            }
+            result = body(workspace.stripController)
+        }
+        return result
+    }
+
+    /// `niri_mode <on|off|toggle>` — enable/disable the niri strip for the selected workspace.
+    private func niriMode(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            switch arg {
+            case "on", "strip", "enable", "true":
+                controller.enableStripMode()
+            case "off", "tiling", "disable", "false":
+                controller.disableStripMode()
+            case "toggle", "":
+                controller.toggleStripMode()
+            default:
+                return "ERROR: Invalid mode. Use on, off, or toggle."
+            }
+            return "OK \(controller.mode.rawValue)"
+        }
+    }
+
+    /// `niri_status` — JSON snapshot of the selected workspace's strip (columns, widths, x,
+    /// scroll offset, focus). Read-only; used by automation/tests to assert invariants.
+    private func niriStatus() -> String {
+        return withSelectedStripController { controller in
+            let snapshot = controller.statusSnapshot()
+            guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+                  let json = String(data: data, encoding: .utf8) else {
+                return "ERROR: Failed to encode strip status"
+            }
+            return json
+        }
+    }
+
+    /// `niri_open` / `niri_open_stacked` / `niri_close` — structural strip actions.
+    private func niriAction(_ action: NiriStructuralAction) -> String {
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch action {
+            case .open:
+                if let panelId = controller.openColumn() { return "OK \(panelId.uuidString)" }
+                return "ERROR: Failed to open column"
+            case .openStacked:
+                if let panelId = controller.openStackedWindow() { return "OK \(panelId.uuidString)" }
+                return "ERROR: Failed to open stacked window"
+            case .close:
+                controller.closeFocusedColumn()
+                return "OK"
+            }
+        }
+    }
+
+    /// `niri_focus <left|right|up|down>` — move focus across columns or within a column.
+    private func niriFocus(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "left": controller.focusColumn(.left)
+            case "right": controller.focusColumn(.right)
+            case "up": controller.focusWindow(.up)
+            case "down": controller.focusWindow(.down)
+            default: return "ERROR: Invalid direction. Use left, right, up, or down."
+            }
+            return "OK"
+        }
+    }
+
+    /// `niri_fullscreen <on|off|toggle>` — fullscreen the focused column (fill the viewport),
+    /// the niri-mode equivalent of pane-zoom. Mirrors the `Toggle Pane Zoom` shortcut, which
+    /// routes here while the strip is active.
+    private func niriFullscreen(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "on", "enable", "true":
+                if !controller.isColumnFullscreen { controller.toggleColumnFullscreen() }
+            case "off", "disable", "false":
+                if controller.isColumnFullscreen { controller.toggleColumnFullscreen() }
+            case "toggle", "":
+                controller.toggleColumnFullscreen()
+            default:
+                return "ERROR: Invalid arg. Use on, off, or toggle."
+            }
+            return "OK \(controller.isColumnFullscreen ? "fullscreen" : "strip")"
+        }
+    }
+
+    /// `niri_overview <on|off|toggle>` — open/close the zoom-out overview.
+    private func niriOverview(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "on", "open", "enable", "true": controller.enterOverview()
+            case "off", "close", "cancel", "disable", "false": controller.cancelOverview()
+            case "toggle", "": controller.toggleOverview()
+            default: return "ERROR: Invalid arg. Use on, off, or toggle."
+            }
+            return "OK \(controller.isOverviewActive ? "overview" : "strip")"
+        }
+    }
+
+    /// `niri_overview_move <left|right>` — move the overview highlight.
+    private func niriOverviewMove(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isOverviewActive else { return "ERROR: overview is not active" }
+            switch arg {
+            case "left": controller.moveOverviewSelection(.left)
+            case "right": controller.moveOverviewSelection(.right)
+            default: return "ERROR: Invalid direction. Use left or right."
+            }
+            return "OK \(controller.overviewSelectionIndex)"
+        }
+    }
+
+    /// `niri_overview_select` — select the highlighted column and close the overview.
+    private func niriOverviewSelect() -> String {
+        return withSelectedStripController { controller in
+            guard controller.isOverviewActive else { return "ERROR: overview is not active" }
+            controller.selectOverviewColumn()
+            return "OK \(controller.layout.focusedColumnIndex)"
+        }
+    }
+
+    /// `niri_move <left|right>` — reorder the focused column on the strip.
+    private func niriMove(_ args: String) -> String {
+        let arg = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return withSelectedStripController { controller in
+            guard controller.isStripMode else { return "ERROR: niri-mode is not enabled" }
+            switch arg {
+            case "left": controller.moveColumn(.left)
+            case "right": controller.moveColumn(.right)
+            default: return "ERROR: Invalid direction. Use left or right."
+            }
+            return "OK"
+        }
     }
 
     private func listSurfaces(_ tabArg: String) -> String {

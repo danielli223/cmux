@@ -356,8 +356,19 @@ struct WorkspaceContentView: View {
             )
         }
 
-        bonsplitView
-            .ignoresSafeArea(.container, edges: (isMinimalMode && !isFullScreen) ? .top : [])
+        WorkspaceLayoutSwitch(
+            stripController: workspace.stripController,
+            tiling: bonsplitView,
+            strip: StripWorkspaceView(
+                workspace: workspace,
+                stripController: workspace.stripController,
+                isWorkspaceVisible: isWorkspaceVisible,
+                isWorkspaceInputActive: isWorkspaceInputActive,
+                workspacePortalPriority: workspacePortalPriority,
+                appearance: appearance
+            )
+        )
+        .ignoresSafeArea(.container, edges: (isMinimalMode && !isFullScreen) ? .top : [])
     }
 
     private func syncBonsplitNotificationBadges() {
@@ -863,6 +874,24 @@ struct EmptyPanelView: View {
             DebugUIEventCounters.emptyPanelAppearCount += 1
         }
 #endif
+    }
+}
+
+/// Chooses between the Bonsplit tiling view and the niri-style ``StripWorkspaceView`` based
+/// on the workspace's ``WorkspaceStripController`` mode. It observes the controller directly
+/// so a mode toggle re-renders the workspace content. Both child views are constructed
+/// eagerly (cheap value types); only the selected one's `body` is evaluated.
+private struct WorkspaceLayoutSwitch<Tiling: View, Strip: View>: View {
+    @ObservedObject var stripController: WorkspaceStripController
+    let tiling: Tiling
+    let strip: Strip
+
+    var body: some View {
+        if stripController.mode == .strip {
+            strip
+        } else {
+            tiling
+        }
     }
 }
 

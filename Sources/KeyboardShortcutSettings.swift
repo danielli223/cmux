@@ -158,6 +158,19 @@ enum KeyboardShortcutSettings {
         case diffViewerScrollToTop
         case diffViewerOpenFileSearch
 
+        // niri-mode (scrollable strip layout)
+        case niriToggleMode
+        case niriNewColumn
+        case niriNewStackedWindow
+        case niriCloseColumn
+        case niriFocusColumnLeft
+        case niriFocusColumnRight
+        case niriFocusWindowUp
+        case niriFocusWindowDown
+        case niriMoveColumnLeft
+        case niriMoveColumnRight
+        case niriToggleOverview
+
         var id: String { rawValue }
 
         var label: String {
@@ -252,6 +265,17 @@ enum KeyboardShortcutSettings {
             case .diffViewerScrollToBottom: return String(localized: "shortcut.diffViewerScrollToBottom.label", defaultValue: "Diff Viewer: Scroll to Bottom")
             case .diffViewerScrollToTop: return String(localized: "shortcut.diffViewerScrollToTop.label", defaultValue: "Diff Viewer: Scroll to Top")
             case .diffViewerOpenFileSearch: return String(localized: "shortcut.diffViewerOpenFileSearch.label", defaultValue: "Diff Viewer: Open File Search")
+            case .niriToggleMode: return String(localized: "shortcut.niriToggleMode.label", defaultValue: "Toggle Scrollable Strip Layout")
+            case .niriNewColumn: return String(localized: "shortcut.niriNewColumn.label", defaultValue: "Strip: New Column")
+            case .niriNewStackedWindow: return String(localized: "shortcut.niriNewStackedWindow.label", defaultValue: "Strip: New Stacked Window")
+            case .niriCloseColumn: return String(localized: "shortcut.niriCloseColumn.label", defaultValue: "Strip: Close Column")
+            case .niriFocusColumnLeft: return String(localized: "shortcut.niriFocusColumnLeft.label", defaultValue: "Strip: Focus Column Left")
+            case .niriFocusColumnRight: return String(localized: "shortcut.niriFocusColumnRight.label", defaultValue: "Strip: Focus Column Right")
+            case .niriFocusWindowUp: return String(localized: "shortcut.niriFocusWindowUp.label", defaultValue: "Strip: Focus Window Up")
+            case .niriFocusWindowDown: return String(localized: "shortcut.niriFocusWindowDown.label", defaultValue: "Strip: Focus Window Down")
+            case .niriMoveColumnLeft: return String(localized: "shortcut.niriMoveColumnLeft.label", defaultValue: "Strip: Move Column Left")
+            case .niriMoveColumnRight: return String(localized: "shortcut.niriMoveColumnRight.label", defaultValue: "Strip: Move Column Right")
+            case .niriToggleOverview: return String(localized: "shortcut.niriToggleOverview.label", defaultValue: "Strip: Toggle Overview (Zoom Out)")
             }
         }
 
@@ -484,6 +508,32 @@ enum KeyboardShortcutSettings {
                 )
             case .diffViewerOpenFileSearch:
                 return StoredShortcut(key: "/", command: false, shift: false, option: false, control: false)
+            // niri-mode lives on the otherwise-unused Control+Option layer.
+            case .niriToggleMode:
+                return StoredShortcut(key: "s", command: false, shift: false, option: true, control: true)
+            case .niriNewColumn:
+                return StoredShortcut(key: "n", command: false, shift: false, option: true, control: true)
+            case .niriNewStackedWindow:
+                return StoredShortcut(key: "n", command: false, shift: true, option: true, control: true)
+            case .niriCloseColumn:
+                return StoredShortcut(key: "w", command: false, shift: false, option: true, control: true)
+            // Vim-style letters instead of arrows: Control+Option+Arrow collides with window
+            // managers (Rectangle/Magnet default to exactly ⌃⌥Arrow), Mission Control, and
+            // terminal word-movement, which steal the event before cmux sees it.
+            case .niriFocusColumnLeft:
+                return StoredShortcut(key: "h", command: false, shift: false, option: true, control: true)
+            case .niriFocusColumnRight:
+                return StoredShortcut(key: "l", command: false, shift: false, option: true, control: true)
+            case .niriFocusWindowUp:
+                return StoredShortcut(key: "k", command: false, shift: false, option: true, control: true)
+            case .niriFocusWindowDown:
+                return StoredShortcut(key: "j", command: false, shift: false, option: true, control: true)
+            case .niriMoveColumnLeft:
+                return StoredShortcut(key: "h", command: false, shift: true, option: true, control: true)
+            case .niriMoveColumnRight:
+                return StoredShortcut(key: "l", command: false, shift: true, option: true, control: true)
+            case .niriToggleOverview:
+                return StoredShortcut(key: "v", command: false, shift: false, option: true, control: true)
             }
         }
 

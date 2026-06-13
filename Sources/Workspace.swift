@@ -253,7 +253,12 @@ extension Workspace {
             logEntries: logSnapshots,
             progress: progressSnapshot,
             gitBranch: gitBranchSnapshot,
-            remote: remoteConfiguration?.sessionSnapshot()
+            remote: remoteConfiguration?.sessionSnapshot(),
+            layoutMode: stripController.mode == .strip ? WorkspaceLayoutMode.strip.rawValue : nil,
+            stripColumns: stripController.sessionColumnPanelIDs(),
+            stripFocusedColumnIndex: stripController.mode == .strip
+                ? stripController.layout.focusedColumnIndex
+                : nil
         )
     }
 
@@ -369,6 +374,24 @@ extension Workspace {
         }
         AppDelegate.shared?.notificationStore?.restoreSessionNotifications(restoredNotifications, forTabId: id)
         syncUnreadBadgeStateForAllPanels()
+
+        // Restore niri-mode strip, remapping persisted panel ids to the live ones.
+        if snapshot.layoutMode == WorkspaceLayoutMode.strip.rawValue,
+           let persistedColumns = snapshot.stripColumns {
+            let remappedColumns: [[UUID]] = persistedColumns.map { panelIDs in
+                panelIDs.compactMap { oldToNewPanelIds[$0] }
+            }.filter { !$0.isEmpty }
+            if !remappedColumns.isEmpty {
+                let focusIndex = min(
+                    max(snapshot.stripFocusedColumnIndex ?? 0, 0),
+                    remappedColumns.count - 1
+                )
+                stripController.restoreFromSession(
+                    columnPanelIDs: remappedColumns,
+                    focusedColumnIndex: focusIndex
+                )
+            }
+        }
         return oldToNewPanelIds
     }
 
@@ -10330,6 +10353,15 @@ final class Workspace: Identifiable, ObservableObject {
 
     /// The bonsplit controller managing the split panes for this workspace
     let bonsplitController: BonsplitController
+
+    /// Per-workspace niri-style scrollable-strip controller. Dormant (mode `.tiling`) by
+    /// default, so this property has zero effect on tiling behavior until niri-mode is
+    /// enabled. Created lazily and wired to `self` as its `StripPanelBridge`.
+    lazy var stripController: WorkspaceStripController = {
+        let controller = WorkspaceStripController()
+        controller.bridge = self
+        return controller
+    }()
     private struct SurfaceTabBarExecutableButton {
         let button: CmuxSurfaceTabBarButton
         let builtInAction: CmuxSurfaceTabBarBuiltInAction?
@@ -16384,6 +16416,13 @@ final class Workspace: Identifiable, ObservableObject {
 
     @discardableResult
     func toggleSplitZoom(panelId: UUID) -> Bool {
+        // In niri-mode the Bonsplit tree is dormant; pane-zoom maps to fullscreening the focused
+        // strip column instead of zooming a dead pane (which would thrash portal visibility
+        // against the unrendered Bonsplit layout). One shared entry point so the keyboard
+        // shortcut, command palette, surface command, and CLI all get the strip behavior.
+        if stripController.isStripMode {
+            return stripController.toggleColumnFullscreen()
+        }
         let wasSplitZoomed = bonsplitController.isSplitZoomed
         guard let paneId = paneId(forPanelId: panelId) else { return false }
         guard bonsplitController.togglePaneZoom(inPane: paneId) else { return false }

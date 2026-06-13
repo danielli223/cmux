@@ -839,6 +839,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var windowKeyObservers: [NSObjectProtocol] = []
     private var shortcutMonitor: Any?
     private var shortcutDefaultsObserver: NSObjectProtocol?
+    /// Transient local NSEvent monitor active only while the niri overview keybind is held
+    /// (hold-to-preview). Removed when the key/modifiers are released (commit) or on cancel.
+    private var niriOverviewHoldMonitor: Any?
     private var menuBarVisibilityObserver: NSObjectProtocol?
     private var reloadConfigurationMenuItemRefreshScheduled = false
     private var splitButtonTooltipRefreshScheduled = false
@@ -13216,6 +13219,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
         if matchConfiguredShortcut(event: event, action: .equalizeSplits) { performEqualizeSplitsShortcut(); return true }
+
+        // niri-mode (scrollable strip) shortcuts. Toggle works in any mode; the rest only
+        // act while the strip is active so they don't shadow other bindings in tiling mode.
+        if matchConfiguredShortcut(event: event, action: .niriToggleMode) {
+            tabManager?.selectedTab?.stripController.toggleStripMode()
+            return true
+        }
+        if let stripController = tabManager?.selectedTab?.stripController, stripController.isStripMode {
+            // Hold-to-preview (⌘-Tab style): the keybind keyDown opens the overview and starts a
+            // hold; a transient monitor commits on release. Ignore key repeats while held.
+            if matchConfiguredShortcut(event: event, action: .niriToggleOverview) {
+                if !event.isARepeat {
+                    beginNiriOverviewHold(stripController: stripController)
+                }
+                return true
+            }
+            if stripController.isOverviewActive {
+                // Overview navigation: arrow keys (plain or the ^⌥ layer) move the highlight,
+                // Return/click selects, Escape cancels. Unhandled keys fall through so global
+                // shortcuts (⌘Q, etc.) still work.
+                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let isPlain = mods.isEmpty
+                if (isPlain && event.keyCode == 123)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.moveOverviewSelection(.left); return true
+                }
+                if (isPlain && event.keyCode == 124)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.moveOverviewSelection(.right); return true
+                }
+                if isPlain && (event.keyCode == 36 || event.keyCode == 76) { // Return / Enter
+                    stripController.selectOverviewColumn(); return true
+                }
+                if event.keyCode == 53 { // Escape
+                    stripController.cancelOverview(); return true
+                }
+                // Swallow up/down so they don't leak to the hidden strip; everything else falls through.
+                if (isPlain && (event.keyCode == 125 || event.keyCode == 126))
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126)
+                    || matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
+                    return true
+                }
+            } else {
+                if matchConfiguredShortcut(event: event, action: .niriNewColumn) {
+                    stripController.openColumn(); return true
+                }
+                if matchConfiguredShortcut(event: event, action: .niriNewStackedWindow) {
+                    stripController.openStackedWindow(); return true
+                }
+                if matchConfiguredShortcut(event: event, action: .niriCloseColumn) {
+                    stripController.closeFocusedColumn(); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.moveColumn(.left); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriMoveColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.moveColumn(.right); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnLeft, arrowGlyph: "←", arrowKeyCode: 123) {
+                    stripController.focusColumn(.left); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusColumnRight, arrowGlyph: "→", arrowKeyCode: 124) {
+                    stripController.focusColumn(.right); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowUp, arrowGlyph: "↑", arrowKeyCode: 126) {
+                    stripController.focusWindow(.up); return true
+                }
+                if matchConfiguredDirectionalShortcut(event: event, action: .niriFocusWindowDown, arrowGlyph: "↓", arrowKeyCode: 125) {
+                    stripController.focusWindow(.down); return true
+                }
+            }
+        }
         // Configured split actions.
         if matchConfiguredShortcut(event: event, action: .splitRight) {
 #if DEBUG
@@ -14047,6 +14124,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             )
         }
 #endif
+    }
+
+    // MARK: - niri overview hold-to-preview
+
+    /// Opens the niri overview and installs a transient monitor so it behaves like ⌘-Tab:
+    /// while ⌃⌥V is held, arrows move the highlight; releasing the key or a modifier commits
+    /// (focuses the highlighted column) and dismisses the overview.
+    private func beginNiriOverviewHold(stripController: WorkspaceStripController) {
+        guard !stripController.isOverviewActive else { return }
+        stripController.enterOverview()
+        removeNiriOverviewHoldMonitor()
+        niriOverviewHoldMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .keyUp, .flagsChanged]
+        ) { [weak self, weak stripController] event in
+            guard let self, let stripController, stripController.isOverviewActive else {
+                self?.removeNiriOverviewHoldMonitor()
+                return event
+            }
+            switch event.type {
+            case .keyUp:
+                if event.keyCode == 9 { // V released -> commit
+                    self.commitNiriOverviewHold(stripController)
+                    return nil
+                }
+            case .flagsChanged:
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if !flags.contains(.control) || !flags.contains(.option) {
+                    self.commitNiriOverviewHold(stripController)
+                    return nil
+                }
+            case .keyDown:
+                switch event.keyCode {
+                case 123, 4: stripController.moveOverviewSelection(.left); return nil  // ← or H
+                case 124, 37: stripController.moveOverviewSelection(.right); return nil // → or L
+                case 125, 126, 38, 40: return nil // swallow up/down and J/K
+                case 36, 76: self.commitNiriOverviewHold(stripController); return nil // Return
+                case 53: self.cancelNiriOverviewHold(stripController); return nil // Escape
+                case 9: return nil // V key repeats while held
+                default: break
+                }
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private func commitNiriOverviewHold(_ stripController: WorkspaceStripController) {
+        removeNiriOverviewHoldMonitor()
+        stripController.selectOverviewColumn()
+    }
+
+    private func cancelNiriOverviewHold(_ stripController: WorkspaceStripController) {
+        removeNiriOverviewHoldMonitor()
+        stripController.cancelOverview()
+    }
+
+    private func removeNiriOverviewHoldMonitor() {
+        if let monitor = niriOverviewHoldMonitor {
+            NSEvent.removeMonitor(monitor)
+            niriOverviewHoldMonitor = nil
+        }
     }
 
     private func handleBrowserOmnibarSelectionRepeatLifecycleEvent(_ event: NSEvent) {

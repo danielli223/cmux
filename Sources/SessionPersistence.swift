@@ -1797,6 +1797,14 @@ struct SessionWorkspaceSnapshot: Codable, Sendable {
     var progress: SessionProgressSnapshot?
     var gitBranch: SessionGitBranchSnapshot?
     var remote: SessionRemoteWorkspaceSnapshot?
+    /// niri-mode layout, when active. `nil`/`"tiling"` means the workspace uses Bonsplit
+    /// tiling. `"strip"` means the niri scrollable strip, with structure in
+    /// ``stripColumns``. Optional so tiling-only sessions and older files stay compatible.
+    var layoutMode: String? = nil
+    /// Per-column ordered window panel ids for niri-mode restore (see ``layoutMode``).
+    var stripColumns: [[UUID]]? = nil
+    /// The focused column index to restore in niri-mode.
+    var stripFocusedColumnIndex: Int? = nil
 }
 
 struct SessionWorkspaceGroupSnapshot: Codable, Sendable, Equatable {

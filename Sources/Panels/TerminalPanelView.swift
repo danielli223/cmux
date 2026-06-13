@@ -183,6 +183,28 @@ struct PanelAppearance {
         usesClearContentBackground ? .clear : backgroundColor
     }
 
+    /// Returns a copy that dims the unfocused panel with a **dark scrim**, used by niri-mode so the
+    /// focused column reads clearly against its neighbours.
+    ///
+    /// This intentionally overrides the theme's `unfocusedOverlayNSColor`, which on light themes is
+    /// a *light wash* tint that would only lighten (wash out) the unfocused column rather than make
+    /// the focus contrast obvious. ``GhosttyTerminalView`` applies the overlay as
+    /// `color.withAlphaComponent(opacity)`, so passing an opaque dark colour plus the desired
+    /// opacity yields a true darkening regardless of the terminal theme.
+    /// - Parameters:
+    ///   - opacity: The exact scrim opacity (a true dim strength, not blended with the theme value).
+    ///   - color: The scrim colour (defaults to black).
+    func withStrongerUnfocusedDim(opacity: Double, color: NSColor = .black) -> PanelAppearance {
+        PanelAppearance(
+            backgroundColor: backgroundColor,
+            foregroundColor: foregroundColor,
+            dividerColor: dividerColor,
+            unfocusedOverlayNSColor: color,
+            unfocusedOverlayOpacity: opacity,
+            usesClearContentBackground: usesClearContentBackground
+        )
+    }
+
     var drawsContentBackground: Bool {
         !usesClearContentBackground
     }

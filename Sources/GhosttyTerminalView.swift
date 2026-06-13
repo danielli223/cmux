@@ -11394,6 +11394,11 @@ final class GhosttySurfaceScrollView: NSView {
     private let notificationRingLayer: CAShapeLayer
     private let flashOverlayView: GhosttyFlashOverlayView
     private let flashLayer: CAShapeLayer
+    /// The live Core Animation layer (a `GhosttyMetalLayer`) presenting this surface's frames.
+    /// The niri overview mirrors this layer's presented `IOSurface` into a scaled tile without
+    /// resizing — and thus without reflowing — the source surface.
+    var liveSurfaceLayer: CALayer? { surfaceView.layer }
+
     var isRightSidebarDockSurface: Bool {
         surfaceView.terminalSurface?.focusPlacement == .rightSidebarDock
     }

@@ -2808,6 +2808,14 @@ class TabManager: ObservableObject {
                     sendWelcomeWhenReady(to: newWorkspace)
                 }
             }
+            // niri-mode is the default layout: once the freshly created workspace has its initial
+            // terminal, enter the scrollable strip. Deferred (not inline) so it stays clear of the
+            // ARC-sensitive creation sequence above. `enableStripMode()` is a no-op if already in
+            // strip mode, and restored sessions take a separate path (`restoreSessionSnapshot`), so
+            // this only affects newly created workspaces. The `⌃⌥S` toggle still switches to tiling.
+            DispatchQueue.main.async { [weak newWorkspace] in
+                newWorkspace?.stripController.enableStripMode()
+            }
             return newWorkspace
         }
     }
